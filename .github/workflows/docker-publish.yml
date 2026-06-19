@@ -1,0 +1,94 @@
+# Builds the CloudCLI Docker image on every push to xxj_main and pushes it
+# to Aliyun ACR. GitHub Actions (public repo: unlimited, private repo:
+# 2000 min/month free) handles the build; ACR only stores the image, so
+# this stays free regardless of ACR's auto-build pricing changes.
+#
+# Setup (one-time, see README or run sheet):
+#   1. Create an ACR personal-edition repository (no code-source binding).
+#   2. In GitHub repo Settings → Secrets and variables → Actions → New secret:
+#        ACR_REGISTRY    e.g. registry.cn-hangzhou.aliyuncs.com
+#        ACR_NAMESPACE   e.g. xxjwulu
+#        ACR_REPOSITORY  e.g. cloudcli
+#        ACR_USERNAME    the registry login name you set when opening ACR
+#        ACR_PASSWORD    the registry password you set when opening ACR
+#   3. Push to xxj_main → this workflow runs → image appears in ACR.
+#   4. On the Aliyun ECS host: docker pull + docker run (see Dockerfile header).
+
+name: Build and push Docker image to ACR
+
+on:
+  push:
+    branches: [xxj_main]
+  # Allow manual trigger from the Actions tab.
+  workflow_dispatch:
+
+# Avoid concurrent builds racing over the same `latest` tag.
+concurrency:
+  group: docker-publish-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PLATFORM: linux/amd64
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        # Not strictly required since we only build linux/amd64, but keeps
+        # buildx happy and lets us add architectures later without rework.
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+          logout: true
+
+      - name: Resolve image tags
+        id: tags
+        run: |
+          # Always push `latest` so the Aliyun ECS host can pull without
+          # tracking versions. Also push the 7-char git short sha for
+          # rollback / pinning to a specific build.
+          SHORT_SHA="${GITHUB_SHA::7}"
+          IMAGE="${{ secrets.ACR_REGISTRY }}/${{ secrets.ACR_NAMESPACE }}/${{ secrets.ACR_REPOSITORY }}"
+          echo "primary=${IMAGE}:latest" >> "$GITHUB_OUTPUT"
+          echo "sha=${IMAGE}:${SHORT_SHA}" >> "$GITHUB_OUTPUT"
+          echo "Resolved tags:"
+          echo "  primary = ${IMAGE}:latest"
+          echo "  sha     = ${IMAGE}:${SHORT_SHA}"
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: ${{ env.PLATFORM }}
+          push: true
+          tags: |
+            ${{ steps.tags.outputs.primary }}
+            ${{ steps.tags.outputs.sha }}
+          # Pass through the China npm mirror as a build arg — GitHub-hosted
+          # runners are outside CN and reach the default registry.npmjs.org
+          # directly. Override if you want a different mirror.
+          build-args: |
+            NPM_REGISTRY=https://registry.npmjs.org
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Image digests
+        if: always()
+        run: |
+          echo "::notice::Pushed ${{ steps.tags.outputs.primary }}"
+          echo "::notice::Pushed ${{ steps.tags.outputs.sha }}"
