@@ -25,6 +25,9 @@ Thanks for your interest in contributing to CloudCLI UI! Before you start, pleas
    ```bash
    npm install
    ```
+
+   > **Windows + China network users:** `npm install` may fail on `better-sqlite3` because `prebuild-install` cannot reach `github.com/.../releases/download/...` and falls back to compiling from source (which requires Visual Studio C++ Build Tools). See [Troubleshooting: Windows / China Network](#troubleshooting-windows--china-network) below.
+
 4. Start the development server:
    ```bash
    npm run dev
@@ -33,6 +36,63 @@ Thanks for your interest in contributing to CloudCLI UI! Before you start, pleas
    ```bash
    git checkout -b feat/your-feature-name
    ```
+
+## Troubleshooting: Windows / China Network
+
+### Symptom
+
+`npm install` fails at `better-sqlite3` (or another native module) with:
+
+```
+prebuild-install warn install
+gyp ERR! find VS You need to install the latest version of Visual Studio
+gyp ERR! find VS including the "Desktop development with C++" workload.
+```
+
+### Root cause
+
+The package's prebuilt binary lives on GitHub Releases. If GitHub Releases is unreachable from your network (common in mainland China), `prebuild-install` silently fails and `npm` falls back to compiling from source via `node-gyp`, which fails because no Visual Studio C++ toolchain is installed.
+
+### Quick fix — one-liner
+
+Pass the npmmirror binary mirror via an env var so `prebuild-install` downloads from a China mirror instead of GitHub:
+
+```bash
+npm_config_better_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/better-sqlite3" npm install
+```
+
+### Reliable fix — staged install
+
+If the one-liner still fails for other native modules, install in two stages:
+
+```bash
+# 1) Install all packages without running native build scripts
+npm install --ignore-scripts --no-audit --no-fund
+
+# 2) Pull the better-sqlite3 binary from the China mirror
+cd node_modules/better-sqlite3
+npm_config_better_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/better-sqlite3" npx prebuild-install
+cd ../..
+
+# 3) Run the project's own postinstall (no-op on Windows, fixes macOS permissions)
+node scripts/fix-node-pty.js
+```
+
+Notes:
+- `bcrypt` and `node-pty` bundle their Windows prebuilds inside the package (`prebuilds/win32-x64/`), so no download is needed for them.
+- `sharp` 0.34+ ships platform binaries as separate `@img/sharp-win32-x64` packages that are installed normally — no extra step required.
+
+### Verifying native modules
+
+After install, confirm each native module loads:
+
+```bash
+node -e "require('better-sqlite3'); require('bcrypt'); require('node-pty'); require('sharp'); console.log('all native modules OK')"
+```
+
+### Re-installing later
+
+`npm install` only needs to be re-run when `package.json` changes (added/removed/updated dependencies). For everyday code changes, the Vite and tsx dev servers hot-reload automatically — no reinstall needed. When you do reinstall, remember to pass the `better-sqlite3` mirror env var as shown above.
 
 ## Project Structure
 
