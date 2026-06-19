@@ -1,4 +1,3 @@
-# syntax=docker/dockerfile:1
 #
 # Multi-stage Dockerfile for CloudCLI UI.
 # Build the image once (e.g. in Aliyun ACR automated build) and ship to any
