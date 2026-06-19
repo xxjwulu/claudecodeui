@@ -224,13 +224,20 @@ function ChatInterface({
     if (!selectedProject || !selectedSession) return;
     await sessionStore.refreshFromServer(selectedSession.id);
     statusCheckSentAtRef.current.set(selectedSession.id, Date.now());
-    sendMessage({
+    const sent = sendMessage({
       type: 'chat.subscribe',
       sessions: [{
         sessionId: selectedSession.id,
         lastSeq: lastSeqRef.current.get(selectedSession.id) ?? 0,
       }],
     });
+
+    if (!sent) {
+      // The socket dropped again between the onopen callback and this send.
+      // The 3s reconnect loop will fire handleWebSocketReconnect once it's
+      // really back, so just log instead of nagging the user.
+      console.warn(`[Chat] re-subscribe to session ${selectedSession.id} dropped — socket not stable yet`);
+    }
   }, [selectedProject, selectedSession, sendMessage, sessionStore]);
 
   useChatRealtimeHandlers({

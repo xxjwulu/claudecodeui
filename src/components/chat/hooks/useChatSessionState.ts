@@ -461,13 +461,17 @@ export function useChatSessionState({
       }
 
       statusCheckSentAtRef.current.set(selectedSessionId, Date.now());
-      sendMessage({
+      const sent = sendMessage({
         type: 'chat.subscribe',
         sessions: [{
           sessionId: selectedSessionId,
           lastSeq: lastSeqRef.current.get(selectedSessionId) ?? 0,
         }],
       });
+
+      if (!sent) {
+        console.warn(`[Chat] subscribe to session ${selectedSessionId} dropped — websocket not connected`);
+      }
     };
 
     // Skip if already loaded and fresh
