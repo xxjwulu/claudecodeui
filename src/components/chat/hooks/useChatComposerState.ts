@@ -42,7 +42,7 @@ interface UseChatComposerStateArgs {
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
-  sendMessage: (message: unknown) => void;
+  sendMessage: (message: unknown) => boolean;
   sendByCtrlEnter?: boolean;
   onSessionProcessing?: MarkSessionProcessing;
   /**
@@ -655,25 +655,6 @@ export function useChatComposerState({
         });
       }
 
-      const userMessage: ChatMessage = {
-        type: 'user',
-        content: currentInput,
-        images: uploadedImages as any,
-        timestamp: new Date(),
-      };
-
-      addMessage(userMessage);
-      // Mark this request as processing in the per-session activity map (the
-      // single source of truth the indicator derives from). The id is always
-      // concrete at this point — no pending placeholder exists anymore.
-      onSessionProcessing?.(targetSessionId, {
-        statusText: null,
-        canInterrupt: true,
-      });
-
-      setIsUserScrolledUp(false);
-      setTimeout(() => scrollToBottom(), 100);
-
       const getToolsSettings = () => {
         try {
           const settingsKey =
@@ -716,7 +697,13 @@ export function useChatComposerState({
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
       // session row; `options` only carries composer-level preferences.
-      sendMessage({
+      //
+      // Send BEFORE any UI side effects. If the websocket is not connected
+      // (e.g. mid-reconnect), `sendMessage` returns false and we bail out
+      // with an inline error instead of entering a permanent "loading"
+      // state — the user keeps their input draft and can retry once the
+      // socket comes back.
+      const sent = sendMessage({
         type: 'chat.send',
         sessionId: targetSessionId,
         content: messageContent,
@@ -731,6 +718,34 @@ export function useChatComposerState({
           images: uploadedImages,
         },
       });
+
+      if (!sent) {
+        addMessage({
+          type: 'error',
+          content: 'WebSocket 连接断开，正在重连…请稍后重试。',
+          timestamp: new Date(),
+        });
+        return;
+      }
+
+      const userMessage: ChatMessage = {
+        type: 'user',
+        content: currentInput,
+        images: uploadedImages as any,
+        timestamp: new Date(),
+      };
+
+      addMessage(userMessage);
+      // Mark this request as processing in the per-session activity map (the
+      // single source of truth the indicator derives from). The id is always
+      // concrete at this point — no pending placeholder exists anymore.
+      onSessionProcessing?.(targetSessionId, {
+        statusText: null,
+        canInterrupt: true,
+      });
+
+      setIsUserScrolledUp(false);
+      setTimeout(() => scrollToBottom(), 100);
 
       setInput('');
       inputValueRef.current = '';
