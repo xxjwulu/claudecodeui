@@ -5,6 +5,14 @@ import path from 'node:path';
 const DEFAULT_CLAUDE_COMMAND = 'claude';
 const CLAUDE_SCRIPT_EXTENSIONS = new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
 const CLAUDE_WRAPPER_SEGMENTS = ['node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'] as const;
+/**
+ * Standard location of the JS launcher shipped by the npm package
+ * `@anthropic-ai/claude-code`. When the native `claude.exe` is absent (i.e.
+ * Claude Code was installed via `npm install -g` rather than the native
+ * installer), the SDK still works if it is handed the `cli.js` path —
+ * internally it detects the `.js` extension and spawns `node cli.js ...`.
+ */
+const CLAUDE_JS_LAUNCHER_SEGMENTS = ['node_modules', '@anthropic-ai', 'claude-code', 'cli.js'] as const;
 
 export type ResolveClaudeCodeExecutablePathDependencies = {
   execFileSync?: typeof execFileSync;
@@ -52,6 +60,34 @@ function resolveClaudeWrapperBinary(
 
   const matches = content.matchAll(/["']([^"'\\\r\n]*claude\.exe)["']/gi);
   for (const match of matches) {
+    const rawTarget = match[1]
+      .replace(/^\$basedir[\\/]/i, '')
+      .replace(/^%dp0%[\\/]/i, '')
+      .replace(/^%~dp0[\\/]/i, '');
+    const normalizedTarget = rawTarget.replace(/[\\/]/g, pathApi.sep);
+    const candidate = pathApi.isAbsolute(normalizedTarget)
+      ? normalizedTarget
+      : pathApi.resolve(pathApi.dirname(wrapperPath), normalizedTarget);
+
+    if (deps.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fallback: Claude Code installed via npm (no native binary). Hand the JS
+  // launcher to the SDK — it detects the `.js` extension and runs it through
+  // `node`. Try the standard npm layout first, then parse the wrapper for
+  // any cli.js reference in case the package lives elsewhere.
+  const jsLauncherCandidate = pathApi.resolve(
+    pathApi.dirname(wrapperPath),
+    ...CLAUDE_JS_LAUNCHER_SEGMENTS,
+  );
+  if (deps.existsSync(jsLauncherCandidate)) {
+    return jsLauncherCandidate;
+  }
+
+  const jsMatches = content.matchAll(/["']([^"'\\\r\n]*@anthropic-ai[\\/][^"'\\\r\n]*cli\.js)["']/gi);
+  for (const match of jsMatches) {
     const rawTarget = match[1]
       .replace(/^\$basedir[\\/]/i, '')
       .replace(/^%dp0%[\\/]/i, '')

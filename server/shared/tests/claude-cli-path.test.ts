@@ -59,3 +59,22 @@ test('resolveClaudeCodeExecutablePath falls back to the configured command when 
 
   assert.equal(resolved, 'claude');
 });
+
+test('resolveClaudeCodeExecutablePath falls back to the npm cli.js launcher when no native binary exists on Windows', () => {
+  const wrapperDir = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+  const jsLauncherPath = `${wrapperDir}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
+  const execFileSync = (() =>
+    `${wrapperDir}\\claude\r\n${wrapperDir}\\claude.cmd\r\n`) as unknown as ResolveClaudeCodeExecutablePathDependencies['execFileSync'];
+  const readFileSync = (() =>
+    `exec "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"`) as unknown as ResolveClaudeCodeExecutablePathDependencies['readFileSync'];
+
+  const resolved = resolveClaudeCodeExecutablePath('claude', {
+    platform: 'win32',
+    execFileSync,
+    // No claude.exe exists anywhere — only the JS launcher does.
+    existsSync: (candidate) => candidate === jsLauncherPath,
+    readFileSync,
+  });
+
+  assert.equal(resolved, jsLauncherPath);
+});
