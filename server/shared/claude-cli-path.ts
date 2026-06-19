@@ -155,6 +155,79 @@ function resolveWindowsClaudeExecutablePath(
   return configuredPath;
 }
 
+/**
+ * Well-known git-bash locations on Windows. Claude Code (>=2.x) requires
+ * git-bash on Windows and refuses to start without one in PATH or pointed
+ * to by CLAUDE_CODE_GIT_BASH_PATH. When git is installed on a non-C: drive
+ * (or otherwise not on PATH for the spawned subprocess), the user would
+ * otherwise see "Claude Code on Windows requires git-bash" and have to
+ * configure the env var manually.
+ */
+const GIT_BASH_KNOWN_LOCATIONS = [
+  'C:\\Program Files\\Git\\bin\\bash.exe',
+  'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+  'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+  'C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe',
+] as const;
+
+export type ResolveGitBashPathDependencies =
+  ResolveClaudeCodeExecutablePathDependencies;
+
+/**
+ * Resolves the git-bash binary path on Windows. Returns `null` on non-Windows
+ * platforms or when no bash.exe can be found.
+ *
+ * Resolution order:
+ *   1. The existing `CLAUDE_CODE_GIT_BASH_PATH` env var (already configured).
+ *   2. `where.exe bash.exe` PATH lookup.
+ *   3. Well-known install locations (covers git on a non-C: drive where the
+ *      subprocess may not have the parent's PATH).
+ */
+export function resolveGitBashPath(
+  dependencies: ResolveGitBashPathDependencies = {},
+): string | null {
+  const deps: Required<ResolveGitBashPathDependencies> = {
+    execFileSync: dependencies.execFileSync ?? execFileSync,
+    existsSync: dependencies.existsSync ?? fs.existsSync,
+    platform: dependencies.platform ?? process.platform,
+    readFileSync: dependencies.readFileSync ?? fs.readFileSync,
+  };
+
+  if (deps.platform !== 'win32') {
+    return null;
+  }
+
+  const configured = process.env.CLAUDE_CODE_GIT_BASH_PATH;
+  if (configured && deps.existsSync(configured)) {
+    return configured;
+  }
+
+  try {
+    const stdout = deps.execFileSync('where.exe', ['bash.exe'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    const pathCandidate = stdout
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .find(Boolean);
+    if (pathCandidate && deps.existsSync(pathCandidate)) {
+      return pathCandidate;
+    }
+  } catch {
+    // `where` returns non-zero when nothing is found; fall through to known locations.
+  }
+
+  for (const candidate of GIT_BASH_KNOWN_LOCATIONS) {
+    if (deps.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
+}
+
 export function resolveClaudeCodeExecutablePath(
   configuredPath: string | undefined = process.env.CLAUDE_CLI_PATH,
   dependencies: ResolveClaudeCodeExecutablePathDependencies = {},

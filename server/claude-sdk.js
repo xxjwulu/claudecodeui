@@ -19,7 +19,7 @@ import path from 'path';
 import os from 'os';
 import { CLAUDE_FALLBACK_MODELS } from './modules/providers/list/claude/claude-models.provider.js';
 import { providerModelsService } from './modules/providers/services/provider-models.service.js';
-import { resolveClaudeCodeExecutablePath } from './shared/claude-cli-path.js';
+import { resolveClaudeCodeExecutablePath, resolveGitBashPath } from './shared/claude-cli-path.js';
 import {
   createNotificationEvent,
   notifyRunFailed,
@@ -158,6 +158,23 @@ function mapCliOptionsToSDK(options = {}) {
   // Forward all host env vars (e.g. ANTHROPIC_BASE_URL) to the subprocess.
   // Since SDK 0.2.113, options.env replaces process.env instead of overlaying it.
   sdkOptions.env = { ...process.env };
+
+  // CloudCLI spawns Claude Code as a fresh top-level process, never nested.
+  // If the server itself runs inside a Claude Code session (CLAUDECODE is set
+  // in that case), the subprocess would inherit it and abort with
+  // "Claude Code cannot be launched inside another Claude Code session".
+  delete sdkOptions.env.CLAUDECODE;
+
+  // Claude Code (>=2.x) on Windows requires git-bash. Auto-resolve it when
+  // CLAUDE_CODE_GIT_BASH_PATH is not already set, so users with git on a
+  // non-C: drive (or otherwise missing from the subprocess PATH) don't have
+  // to configure it manually.
+  if (process.platform === 'win32' && !sdkOptions.env.CLAUDE_CODE_GIT_BASH_PATH) {
+    const gitBashPath = resolveGitBashPath();
+    if (gitBashPath) {
+      sdkOptions.env.CLAUDE_CODE_GIT_BASH_PATH = gitBashPath;
+    }
+  }
 
   // Resolve the executable eagerly on Windows because the SDK uses raw child_process.spawn,
   // which does not reliably follow npm's shell wrappers like cross-spawn does.
