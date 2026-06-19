@@ -1,0 +1,55 @@
+# Build artifacts — they get rebuilt inside the container.
+dist/
+dist-server/
+dist-ssr/
+build/
+release/
+*.tgz
+
+# Dependencies — rebuilt inside the container.
+node_modules/
+
+# Version control + IDE state.
+.git/
+.gitignore
+.gitattributes
+.vscode/
+.idea/
+*.swp
+
+# Documentation that's not needed at runtime.
+README*.md
+CHANGELOG.md
+CONTRIBUTING.md
+LICENSE
+CLAUDE.md
+docker/
+
+# Test artifacts.
+**/*.test.ts
+**/*.test.js
+**/tests/
+coverage/
+.nyc_output/
+
+# OS / editor cruft.
+.DS_Store
+Thumbs.db
+*.log
+
+# Claude Code session state (will be mounted as a volume at runtime).
+.claude/
+
+# Local env files — never bake secrets into an image.
+.env
+.env.*
+!.env.example
+
+# Husky / commitlint config — dev-only.
+.husky/
+commitlint.config.*
+release-it.config.*
+
+# CI configs — not used by the container.
+.github/
+.gitlab-ci.yml
