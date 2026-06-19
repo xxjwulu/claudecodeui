@@ -182,7 +182,14 @@ export type ResolveGitBashPathDependencies =
  *   2. `where.exe bash.exe` PATH lookup.
  *   3. Well-known install locations (covers git on a non-C: drive where the
  *      subprocess may not have the parent's PATH).
+ *
+ * The result is memoized for the process lifetime — git-bash doesn't move
+ * while the server is running, and this function is called per chat message.
+ * Tests bypass the cache via `dependencies.platform` (returning 'linux' short
+ * -circuits before the cache is read or written).
  */
+let cachedGitBashPath: string | null | undefined;
+
 export function resolveGitBashPath(
   dependencies: ResolveGitBashPathDependencies = {},
 ): string | null {
@@ -197,6 +204,26 @@ export function resolveGitBashPath(
     return null;
   }
 
+  // Only real (no-dependency-overrides) calls are cached. Tests inject
+  // existsSync/execFileSync mocks, so caching them would leak between cases.
+  const usesDefaultDeps =
+    dependencies.existsSync === undefined &&
+    dependencies.execFileSync === undefined;
+  if (usesDefaultDeps && cachedGitBashPath !== undefined) {
+    return cachedGitBashPath;
+  }
+
+  const result = resolveGitBashPathUncached(deps);
+
+  if (usesDefaultDeps) {
+    cachedGitBashPath = result;
+  }
+  return result;
+}
+
+function resolveGitBashPathUncached(
+  deps: Required<ResolveGitBashPathDependencies>,
+): string | null {
   const configured = process.env.CLAUDE_CODE_GIT_BASH_PATH;
   if (configured && deps.existsSync(configured)) {
     return configured;

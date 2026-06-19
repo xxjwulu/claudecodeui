@@ -722,7 +722,7 @@ export function useChatComposerState({
       if (!sent) {
         addMessage({
           type: 'error',
-          content: 'WebSocket 连接断开，正在重连…请稍后重试。',
+          content: 'Connection lost. Reconnecting… please retry shortly.',
           timestamp: new Date(),
         });
         return;
