@@ -18,6 +18,17 @@ const getApiError = (payload: { error?: string } | undefined, fallback: string) 
   payload?.error || fallback
 );
 
+/**
+ * Surface a caught error to the user (alert) AND keep it in the console for
+ * debugging. Centralised so every credential mutation reports failures
+ * consistently instead of silently `console.error`-ing.
+ */
+const reportError = (prefix: string, error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  console.error(prefix, error);
+  alert(message);
+};
+
 export function useCredentialsSettings({
   confirmDeleteApiKeyText,
   confirmDeleteGithubCredentialText,
@@ -55,7 +66,7 @@ export function useCredentialsSettings({
       setApiKeys(apiKeysPayload.apiKeys || []);
       setGithubCredentials(credentialsPayload.credentials || []);
     } catch (error) {
-      console.error('Error fetching settings:', error);
+      reportError('Error fetching settings:', error);
     } finally {
       setLoading(false);
     }
@@ -74,7 +85,9 @@ export function useCredentialsSettings({
 
       const payload = await response.json() as ApiKeysResponse;
       if (!response.ok || !payload.success) {
-        console.error('Error creating API key:', getApiError(payload, 'Failed to create API key'));
+        const msg = getApiError(payload, 'Failed to create API key');
+        console.error('Error creating API key:', msg);
+        alert(msg);
         return;
       }
 
@@ -85,7 +98,7 @@ export function useCredentialsSettings({
       setShowNewKeyForm(false);
       await fetchData();
     } catch (error) {
-      console.error('Error creating API key:', error);
+      reportError('Error creating API key:', error);
     }
   }, [fetchData, newKeyName]);
 
@@ -101,13 +114,15 @@ export function useCredentialsSettings({
 
       if (!response.ok) {
         const payload = await response.json() as ApiKeysResponse;
-        console.error('Error deleting API key:', getApiError(payload, 'Failed to delete API key'));
+        const msg = getApiError(payload, 'Failed to delete API key');
+        console.error('Error deleting API key:', msg);
+        alert(msg);
         return;
       }
 
       await fetchData();
     } catch (error) {
-      console.error('Error deleting API key:', error);
+      reportError('Error deleting API key:', error);
     }
   }, [confirmDeleteApiKeyText, fetchData]);
 
@@ -120,13 +135,15 @@ export function useCredentialsSettings({
 
       if (!response.ok) {
         const payload = await response.json() as ApiKeysResponse;
-        console.error('Error toggling API key:', getApiError(payload, 'Failed to toggle API key'));
+        const msg = getApiError(payload, 'Failed to toggle API key');
+        console.error('Error toggling API key:', msg);
+        alert(msg);
         return;
       }
 
       await fetchData();
     } catch (error) {
-      console.error('Error toggling API key:', error);
+      reportError('Error toggling API key:', error);
     }
   }, [fetchData]);
 
@@ -148,7 +165,9 @@ export function useCredentialsSettings({
 
       const payload = await response.json() as GithubCredentialsResponse;
       if (!response.ok || !payload.success) {
-        console.error('Error creating GitHub credential:', getApiError(payload, 'Failed to create GitHub credential'));
+        const msg = getApiError(payload, 'Failed to create GitHub credential');
+        console.error('Error creating GitHub credential:', msg);
+        alert(msg);
         return;
       }
 
@@ -159,7 +178,7 @@ export function useCredentialsSettings({
       setShowToken((prev) => ({ ...prev, new: false }));
       await fetchData();
     } catch (error) {
-      console.error('Error creating GitHub credential:', error);
+      reportError('Error creating GitHub credential:', error);
     }
   }, [fetchData, newGithubDescription, newGithubName, newGithubToken]);
 
@@ -175,13 +194,15 @@ export function useCredentialsSettings({
 
       if (!response.ok) {
         const payload = await response.json() as GithubCredentialsResponse;
-        console.error('Error deleting GitHub credential:', getApiError(payload, 'Failed to delete GitHub credential'));
+        const msg = getApiError(payload, 'Failed to delete GitHub credential');
+        console.error('Error deleting GitHub credential:', msg);
+        alert(msg);
         return;
       }
 
       await fetchData();
     } catch (error) {
-      console.error('Error deleting GitHub credential:', error);
+      reportError('Error deleting GitHub credential:', error);
     }
   }, [confirmDeleteGithubCredentialText, fetchData]);
 
@@ -194,13 +215,15 @@ export function useCredentialsSettings({
 
       if (!response.ok) {
         const payload = await response.json() as GithubCredentialsResponse;
-        console.error('Error toggling GitHub credential:', getApiError(payload, 'Failed to toggle GitHub credential'));
+        const msg = getApiError(payload, 'Failed to toggle GitHub credential');
+        console.error('Error toggling GitHub credential:', msg);
+        alert(msg);
         return;
       }
 
       await fetchData();
     } catch (error) {
-      console.error('Error toggling GitHub credential:', error);
+      reportError('Error toggling GitHub credential:', error);
     }
   }, [fetchData]);
 

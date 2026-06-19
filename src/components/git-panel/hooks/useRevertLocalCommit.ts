@@ -31,13 +31,17 @@ export function useRevertLocalCommit({ projectId, onSuccess }: UseRevertLocalCom
       const data = await readJson<GitOperationResponse>(response);
 
       if (!data.success) {
-        console.error('Revert local commit failed:', data.error || data.details || 'Unknown error');
+        const msg = String(data.error || data.details || 'Revert failed');
+        console.error('Revert local commit failed:', msg);
+        alert(msg);
         return;
       }
 
       onSuccess?.();
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('Error reverting local commit:', error);
+      alert(message);
     } finally {
       setIsRevertingLocalCommit(false);
     }

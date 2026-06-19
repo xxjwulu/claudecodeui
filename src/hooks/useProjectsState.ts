@@ -426,7 +426,15 @@ export function useProjectsState({
           : prevProjects;
       });
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('Error fetching projects:', error);
+      // Initial project list is critical — without it the sidebar is empty
+      // and the user has no way to know why. Auto-refresh passes
+      // showLoadingState=false, so the alert only fires for explicit loads
+      // (initial mount + manual refresh), not background polls.
+      if (showLoadingState) {
+        alert(message);
+      }
     } finally {
       if (showLoadingState) {
         setIsLoadingProjects(false);
@@ -871,7 +879,9 @@ export function useProjectsState({
         }
       }
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('Error refreshing sidebar:', error);
+      alert(message);
     }
   }, [projects, selectedProject, selectedSession]);
 

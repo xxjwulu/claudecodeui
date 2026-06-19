@@ -690,9 +690,12 @@ export function useSidebarController({
           await paletteOps.refreshProjects();
         } else {
           console.error('Failed to rename project');
+          alert('Failed to rename project');
         }
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Error renaming project:', error);
+        alert(message);
       } finally {
         setEditingProject(null);
         setEditingName('');
