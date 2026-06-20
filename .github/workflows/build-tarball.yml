@@ -23,6 +23,12 @@ concurrency:
   group: tarball-${{ github.ref }}
   cancel-in-progress: true
 
+# softprops/action-gh-release needs contents: write to create/update
+# the rolling `latest` release. New repos default GITHUB_TOKEN to read-only,
+# which causes a silent 404 on the release API.
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
