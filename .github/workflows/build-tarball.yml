@@ -161,7 +161,15 @@ jobs:
       # github.com releases, which often times out from CN networks).
       # Force-push keeps the branch a single commit — repo doesn't grow
       # unboundedly with every build.
-      - name: Sync tarball to gitcode (China mirror)
+      #
+      # NOTE: this step is best-effort. A 260MB push from a US Actions runner
+      # to a CN git host can stall for 10+ minutes on the "Writing objects"
+      # phase due to international bandwidth limits. We cap it with
+      # continue-on-error + a timeout so a slow sync never blocks the
+      # overall workflow (the GitHub release is already published).
+      - name: Sync tarball to gitcode (China mirror, best-effort)
+        continue-on-error: true
+        timeout-minutes: 8
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
