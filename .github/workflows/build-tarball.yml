@@ -38,10 +38,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Setup Node.js 22
+      - name: Setup Node.js 24
         uses: actions/setup-node@v4
         with:
-          node-version: '22'
+          # CRITICAL: must match the major Node version on the deploy
+          # target. Native modules (better-sqlite3, bcrypt, node-pty,
+          # sharp) compile against a specific NODE_MODULE_VERSION / ABI,
+          # and the .node files won't load under a different major.
+          # If the host is on Node 22, change this to '22' (and ask
+          # the host to be on 22 too). Mixing majors = "Module did not
+          # self-register" at startup.
+          node-version: '24'
           cache: 'npm'
 
       - name: Install dependencies

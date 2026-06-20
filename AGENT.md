@@ -190,6 +190,18 @@ On Windows hosts where Claude Code is installed via npm (not the native installe
 
 gitcode's CloudWAF rejects programmatic API access from GitHub Actions IPs (HTTP 418 "访问被拦截"). Don't try to mirror the tarball to gitcode via the package API or git push — both are blocked. Use the SCP direct method (Method B) instead, which has no third-party storage dependency.
 
+### `Module did not self-register: .../better_sqlite3.node` (or other native module)
+
+Node.js native modules compile against a specific `NODE_MODULE_VERSION` (the ABI), which differs by major version (Node 22 = ABI 127, Node 24 = ABI 137, etc). The build in `build-tarball.yml` (and `Dockerfile`) pins to a specific Node major — if the deploy target runs a different major, every native module fails to `dlopen` at startup with this error.
+
+The fix is to make the build and the host agree on a major:
+
+- Check what the host has: `node --version`
+- Update `.github/workflows/build-tarball.yml`'s `actions/setup-node` `node-version` to the same major (and the `FROM node:XX-bookworm-slim` line in `Dockerfile` if using Method A)
+- Re-run the workflow, redeploy
+
+This is intentionally not auto-detected — pinning the build to one major produces reproducible artifacts, and changing it is a deliberate decision.
+
 ---
 
 ## Architecture notes (for agents modifying deploy)
