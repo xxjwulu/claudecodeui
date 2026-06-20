@@ -66,6 +66,9 @@ RUN npm prune --omit=dev
 # ---------------------------------------------------------------------------
 FROM node:22-bookworm-slim AS runtime
 
+# Re-declare the registry ARG — Docker ARGs are per-stage.
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+
 # tini reaps zombie processes (node-pty spawns children); ca-certificates
 # is needed for any outbound TLS call the server makes.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -74,6 +77,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
+
+# Install Claude Code CLI globally. CloudCLI drives `claude` as a subprocess
+# to run agent sessions, so the container needs its own copy. The user's
+# Claude data (sessions, credentials, MCP config) is shared with the host
+# via the mounted ~/.claude volume, so the container reuses xxjwulu's
+# existing Claude setup without needing the host's binary.
+RUN npm install -g @anthropic-ai/claude-code --registry="$NPM_REGISTRY"
 
 # Copy only what the runtime needs. Order matters for layer cache: put
 # rarely-changing node_modules first so source changes don't invalidate it.
