@@ -133,41 +133,55 @@ jobs:
       # Force-push keeps the branch a single commit — repo doesn't grow
       # unboundedly with every build.
       - name: Sync tarball to gitcode (China mirror)
-        if: ${{ secrets.GITCODE_TOKEN != '' }}
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
           set -euo pipefail
+          # GitHub Actions' `if: ${{ secrets.X != '' }}` is unreliable; check
+          # inside the shell so an unset secret produces a clear log line
+          # instead of silently skipping the whole step.
+          if [ -z "$GITCODE_TOKEN" ]; then
+            echo "::warning::GITCODE_TOKEN secret is empty — skipping gitcode sync."
+            echo "Configure it in Settings → Secrets to enable China mirror."
+            exit 0
+          fi
+
           git config --global user.email "actions@github.com"
           git config --global user.name "github-actions[bot]"
 
-          WORK="/tmp/gitcode-sync"
-          rm -rf "$WORK"
-          git clone --no-checkout "https://x-access-token:${GITCODE_TOKEN}@gitcode.com/xxjwulu/claudecodeui.git" "$WORK"
+          WORK="$(mktemp -d)"
+          echo "Cloning gitcode.com/xxjwulu/claudecodeui into $WORK ..."
+          # `--no-tags` and depth=1 keep the clone small; we'll force-push.
+          git clone --no-tags "https://x-access-token:${GITCODE_TOKEN}@gitcode.com/xxjwulu/claudecodeui.git" "$WORK"
           cd "$WORK"
 
-          # Reuse the existing orphan branch if it exists, otherwise create one.
-          if git rev-parse --verify --quiet origin/releases >/dev/null; then
-            git checkout --orphan releases
-            git reset --hard origin/releases || true
+          # Fetch any existing releases branch so we can detect its presence.
+          git fetch origin releases:refs/remotes/origin/releases 2>/dev/null || true
+          if git rev-parse --verify --quiet refs/remotes/origin/releases >/dev/null; then
+            echo "Existing releases branch found, will replace it."
           else
-            git checkout --orphan releases
+            echo "No existing releases branch, creating new orphan."
           fi
 
-          # Drop anything tracked from the previous commit; this branch should
-          # only ever contain the current tarball + sha256.
-          git rm -rf --ignore-unmatch . >/dev/null 2>&1 || true
-          rm -rf .git/index
-          git checkout --orphan releases 2>/dev/null || true
+          # Build a brand new orphan branch — this guarantees no carry-over
+          # from previous commits or from xxj_main default checkout.
+          git checkout --force --orphan releases
+          # Wipe the index and working tree, then re-add only our tarball.
+          rm -f .git/index
+          git clean -fdx >/dev/null
 
           # Copy the freshly built tarball in with a stable filename so the
           # download URL never changes between builds.
           cp "$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}" "./cloudcli-linux-x64.tar.gz"
           cp "$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}.sha256" "./cloudcli-linux-x64.tar.gz.sha256"
 
+          ls -lh cloudcli-linux-x64.tar.gz cloudcli-linux-x64.tar.gz.sha256
+
           git add cloudcli-linux-x64.tar.gz cloudcli-linux-x64.tar.gz.sha256
           git commit -m "Auto-release ${{ steps.pack.outputs.short_sha }}" --allow-empty
 
           # Force-push so the branch always has one commit. Without --force
           # the orphan-replace pattern would accumulate history.
+          echo "Pushing to gitcode ..."
           git push --force origin releases
+          echo "Sync complete."
