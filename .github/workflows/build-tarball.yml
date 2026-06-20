@@ -57,6 +57,35 @@ jobs:
       - name: Strip devDependencies
         run: npm prune --omit=dev
 
+      - name: Trim node_modules cruft
+        run: |
+          # Strip documentation, tests, and other build-time-only files from
+          # node_modules. Saves ~80-100MB on this project's dep tree. None
+          # of these are needed at runtime.
+          find node_modules -type f \( \
+            -name '*.md' -o \
+            -name '*.markdown' -o \
+            -name '*.ts' -o \
+            -name '*.d.ts' -o \
+            -name '*.map' -o \
+            -name '*.tsx' -o \
+            -name 'LICENSE*' -o \
+            -name 'CHANGELOG*' \
+          \) -delete 2>/dev/null || true
+          find node_modules -type d \( \
+            -name 'test' -o \
+            -name 'tests' -o \
+            -name '__tests__' -o \
+            -name '__mocks__' -o \
+            -name 'docs' -o \
+            -name 'doc' -o \
+            -name 'examples' -o \
+            -name 'example' \
+          \) -exec rm -rf {} + 2>/dev/null || true
+          # Keep TypeScript source maps for our own dist-server (debugging),
+          # so don't touch dist-server/*.map.
+          echo "After trim: $(du -sh node_modules | cut -f1)"
+
       - name: Stage runtime files
         run: |
           # Build a clean staging dir so the tarball has a single top-level
