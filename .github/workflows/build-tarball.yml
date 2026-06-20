@@ -211,6 +211,9 @@ jobs:
 
           # Force-push so the branch always has one commit. Without --force
           # the orphan-replace pattern would accumulate history.
+          # `--progress` is required because git hides transfer progress
+          # when stdout is not a TTY (i.e. CI). Without it a 260MB push
+          # to a CN git host looks completely stuck.
           echo "Pushing to gitcode ..."
-          git push --force origin releases
+          git push --force --progress origin releases 2>&1 | sed -u 's/^/[git-push] /'
           echo "Sync complete."
