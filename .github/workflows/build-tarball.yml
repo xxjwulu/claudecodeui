@@ -234,11 +234,16 @@ jobs:
 
           if command -v pm2 >/dev/null 2>&1; then
             if pm2 describe cloudcli >/dev/null 2>&1; then
-              pm2 restart cloudcli || pm2 start "node $HOME/cloudcli/dist-server/server/index.js" --name cloudcli
+              pm2 restart cloudcli || pm2 start "$HOME/cloudcli/dist-server/server/index.js" --name cloudcli
               pm2 save 2>/dev/null || true
               echo "Restarted via pm2."
             else
-              pm2 start "node $HOME/cloudcli/dist-server/server/index.js" --name cloudcli
+              # NB: don't wrap the path in quotes and don't prefix with
+              # `node` — pm2 auto-detects .js and uses the node interpreter.
+              # Passing "node /path/to/x.js" makes pm2 invoke /usr/bin/bash
+              # as the entry, which exits immediately and marks the process
+              # errored.
+              pm2 start "$HOME/cloudcli/dist-server/server/index.js" --name cloudcli
               pm2 save 2>/dev/null || true
               echo "Started via pm2."
             fi
