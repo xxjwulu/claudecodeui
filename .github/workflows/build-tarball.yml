@@ -175,7 +175,7 @@ jobs:
 
           # URL-encode the project path (xxjwulu/claudecodeui → xxjwulu%2Fclaudecodeui)
           # for use in the API path.
-          PROJECT_ID=$(printf '%s' "xxjwulu/claudecodeui" | sed 's,/,%%2F,g')
+          PROJECT_ID=$(printf '%s' "xxjwulu/claudecodeui" | sed 's,/,%2F,g')
           API="https://gitcode.com/api/v4/projects/${PROJECT_ID}"
 
           TAR="$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}"
