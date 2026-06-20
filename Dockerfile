@@ -83,8 +83,6 @@ COPY --from=builder /app/dist-server ./dist-server
 COPY --from=builder /app/public ./public
 COPY --from=builder /app/shared ./shared
 COPY --from=builder /app/server ./server
-COPY --from=builder /app/electron ./electron
-COPY --from=builder /app/scripts ./scripts
 COPY --from=builder /app/package.json ./package.json
 
 ENV NODE_ENV=production
