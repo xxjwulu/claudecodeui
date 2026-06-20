@@ -26,7 +26,6 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-$HOME/cloudcli}"
 REPO="${REPO:-xxjwulu/claudecodeui}"
 RELEASE_TAG="${RELEASE_TAG:-latest}"
-GITCODE_HOST="${GITCODE_HOST:-gitcode.com}"
 PARENT_DIR="$(dirname "$INSTALL_DIR")"
 
 # --- preflight -----------------------------------------------------------
@@ -49,117 +48,41 @@ command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required."; exit 1; }
 
 mkdir -p "$PARENT_DIR"
 
-# --- download tarball (China mirror first, GitHub fallback) ----------------
+# --- download tarball from GitHub Releases -------------------------------
 #
-# gitcode.com hosts the tarball via GitLab's Generic Packages API, split
-# into ~20MB chunks because gitcode's reverse proxy caps single-request
-# body size (413 Request Entity Too Large on the full 260MB upload).
-# The deploy script downloads the manifest, fetches each chunk, and
-# concatenates them into the original tarball.
-#
-# For private repos, set GITCODE_TOKEN env var (a Personal Access Token
-# with at least read_api scope) to authenticate.
+# China mirror options (gitcode package API, OSS, etc.) were all blocked
+# or impractical — gitcode's CloudWAF rejects programmatic uploads from
+# GitHub Actions IPs. The recommended path is the SCP-based auto-deploy
+# step in .github/workflows/build-tarball.yml, which bypasses GitHub
+# downloads entirely. This script is a fallback for manual deploys.
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-PROJECT_ID=$(printf '%s' "$REPO" | sed 's,/,%2F,g')
-GITCODE_API_BASE="https://${GITCODE_HOST}/api/v4/projects/${PROJECT_ID}"
-PKG_URL="${GITCODE_API_BASE}/packages/generic/cloudcli/latest"
+echo "Fetching latest release info from $REPO@$RELEASE_TAG..."
+API_URL="https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG"
+TARBALL_URL=$(curl -fsSL "$API_URL" \
+  | grep '"browser_download_url"' \
+  | grep -E 'linux-x64\.tar\.gz"$' \
+  | head -1 \
+  | sed -E 's/.*"(https:[^"]+)".*/\1/')
 
-STABLE="cloudcli-linux-x64.tar.gz"
-TARBALL_PATH="$WORK_DIR/$STABLE"
-SHA_PATH="$TARBALL_PATH.sha256"
-
-# gitcode auth header (only if token provided).
-auth_args=()
-if [ -n "$GITCODE_TOKEN" ]; then
-  auth_args=(--header "PRIVATE-TOKEN: $GITCODE_TOKEN")
+if [ -z "$TARBALL_URL" ]; then
+  echo "ERROR: no linux-x64 tarball found in release '$RELEASE_TAG'."
+  echo "Has the GitHub Actions workflow run at least once?"
+  exit 1
 fi
 
-download_url() {
-  local url="$1" dest="$2"
-  curl -fsSL --retry 3 --max-time 600 "${auth_args[@]}" -o "$dest" "$url"
-}
+FILENAME="$(basename "$TARBALL_URL")"
+echo "Downloading $FILENAME ..."
+curl -fsSL --retry 3 --max-time 1200 -o "$WORK_DIR/$FILENAME" "$TARBALL_URL"
 
-# Try the chunked gitcode path first.
-gitcode_chunked_download() {
-  echo "Downloading manifest from gitcode ..."
-  local manifest_url="$PKG_URL/$STABLE.manifest"
-  local total
-  total=$(download_url "$manifest_url" "$WORK_DIR/manifest" && cat "$WORK_DIR/manifest")
-  if [ -z "$total" ]; then
-    echo "  manifest fetch failed or empty."
-    return 1
-  fi
-  echo "  manifest says $total chunks."
-
-  # Pre-flight: probe one chunk to make sure they exist. If the very
-  # first chunk 404s the gitcode sync hasn't completed; fall back to GitHub.
-  if ! download_url "$PKG_URL/$STABLE.part000" "$WORK_DIR/$STABLE.part000" 2>/dev/null; then
-    echo "  chunk 000 fetch failed; gitcode sync likely hasn't run."
-    return 1
-  fi
-
-  # Download remaining chunks (001..total-1) — 000 is already on disk.
-  # Use printf to zero-pad to 3 digits (matches `split -d -a 3` on the
-  # build side). `seq -f %03d` would also work but isn't portable to
-  # BusyBox seq.
-  local max=$((total - 1))
-  local i=1
-  while [ "$i" -le "$max" ]; do
-    local padded
-    printf -v padded "%03d" "$i"
-    local chunk="$STABLE.part$padded"
-    echo "  downloading $chunk ..."
-    download_url "$PKG_URL/$chunk" "$WORK_DIR/$chunk" || return 1
-    i=$((i + 1))
-  done
-
-  # Reassemble. Globs are sorted lexically by the shell, so part000 < part001
-  # < ... < partNNN regardless of how many chunks there are.
-  echo "  concatenating chunks ..."
-  cat "$WORK_DIR"/$STABLE.part* > "$TARBALL_PATH"
-  rm -f "$WORK_DIR"/$STABLE.part*
-
-  # Pull sha256 if available.
-  download_url "$PKG_URL/$STABLE.sha256" "$SHA_PATH" 2>/dev/null || true
-  return 0
-}
-
-# GitHub Releases fallback (single tarball, no chunking).
-github_release_download() {
-  echo "Falling back to GitHub Releases ..."
-  local api_url="https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG"
-  local gh_url
-  gh_url=$(curl -fsSL "$api_url" \
-    | grep '"browser_download_url"' \
-    | grep -E 'linux-x64\.tar\.gz"$' \
-    | head -1 \
-    | sed -E 's/.*"(https:[^"]+)".*/\1/')
-  if [ -z "$gh_url" ]; then
-    echo "ERROR: no linux-x64 tarball in GitHub release '$RELEASE_TAG'."
-    return 1
-  fi
-  echo "  downloading $(basename "$gh_url") ..."
-  curl -fsSL --retry 3 --max-time 600 -o "$TARBALL_PATH" "$gh_url" || return 1
-  curl -fsSL --retry 3 --max-time 60 -o "$SHA_PATH" "$gh_url.sha256" 2>/dev/null || true
-}
-
-if ! gitcode_chunked_download; then
-  github_release_download || {
-    echo "ERROR: download failed from both gitcode and GitHub."
-    exit 1
-  }
-fi
-
-# Verify sha256 if we got a checksum file.
-if [ -s "$SHA_PATH" ]; then
-  (cd "$WORK_DIR" \
-    && sed -E "s,  [^ ]+$,  $STABLE," "$(basename "$SHA_PATH")" > checksum.fixed \
-    && sha256sum -c checksum.fixed --quiet) \
-    && echo "sha256 verified." \
-    || echo "WARNING: sha256 verification skipped or failed."
+# Verify sha256 if a checksum file is published alongside.
+SHA_URL="${TARBALL_URL}.sha256"
+if curl -fsI "$SHA_URL" >/dev/null 2>&1; then
+  curl -fsSL --retry 3 -o "$WORK_DIR/$FILENAME.sha256" "$SHA_URL"
+  (cd "$WORK_DIR" && sha256sum -c "$FILENAME.sha256" --quiet)
+  echo "sha256 verified."
 fi
 
 # --- stop existing service if pm2 is managing it -------------------------
