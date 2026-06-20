@@ -41,6 +41,13 @@ WORKDIR /app
 # Copy only manifests first to maximise Docker layer cache hits.
 COPY package*.json ./
 
+# Copy the postinstall script before npm install — package.json wires
+# `npm install` to `node scripts/fix-node-pty.js`, which would otherwise
+# fail with "Cannot find module" because scripts/ hasn't been copied yet.
+# The script is a no-op on Linux (it only chmod's spawn-helper on macOS),
+# so copying it adds zero runtime cost.
+COPY scripts/ ./scripts/
+
 # Install everything (including devDeps — we need them to run vite build
 # and tsc). better-sqlite3's prebuild-install will fetch the linux-x64
 # binary from the same mirror; fall back to source compile if it 404s.
