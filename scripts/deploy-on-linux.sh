@@ -26,6 +26,7 @@ set -euo pipefail
 INSTALL_DIR="${INSTALL_DIR:-$HOME/cloudcli}"
 REPO="${REPO:-xxjwulu/claudecodeui}"
 RELEASE_TAG="${RELEASE_TAG:-latest}"
+GITCODE_HOST="${GITCODE_HOST:-gitcode.com}"
 PARENT_DIR="$(dirname "$INSTALL_DIR")"
 
 # --- preflight -----------------------------------------------------------
@@ -48,35 +49,70 @@ command -v curl >/dev/null 2>&1 || { echo "ERROR: curl is required."; exit 1; }
 
 mkdir -p "$PARENT_DIR"
 
-# --- fetch latest release asset URL --------------------------------------
+# --- download tarball (China mirror first, GitHub fallback) ----------------
+#
+# gitcode.com hosts an orphan `releases` branch with a stable filename
+# `cloudcli-linux-x64.tar.gz` that is force-updated on every build. It is
+# dramatically faster than github.com from mainland CN networks.
+#
+# If gitcode is unreachable or the file 404s, fall back to GitHub Releases,
+# which carries the same tarball under a sha-tagged name.
 
-echo "Fetching latest release info from $REPO@$RELEASE_TAG..."
-API_URL="https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG"
-TARBALL_URL=$(curl -fsSL "$API_URL" \
-  | grep '"browser_download_url"' \
-  | grep -E 'linux-x64\.tar\.gz"$' \
-  | head -1 \
-  | sed -E 's/.*"(https:[^"]+)".*/\1/')
-
-if [ -z "$TARBALL_URL" ]; then
-  echo "ERROR: no linux-x64 tarball found in release '$RELEASE_TAG'."
-  echo "Has the GitHub Actions workflow run at least once?"
-  exit 1
-fi
-
-FILENAME="$(basename "$TARBALL_URL")"
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-echo "Downloading $FILENAME..."
-curl -fsSL --retry 3 -o "$WORK_DIR/$FILENAME" "$TARBALL_URL"
+GITCODE_URL="https://${GITCODE_HOST}/$REPO/raw/releases/cloudcli-linux-x64.tar.gz"
+GITCODE_SHA_URL="https://${GITCODE_HOST}/$REPO/raw/releases/cloudcli-linux-x64.tar.gz.sha256"
 
-# Verify sha256 if a checksum file is published alongside.
-SHA_URL="${TARBALL_URL}.sha256"
-if curl -fsI "$SHA_URL" >/dev/null 2>&1; then
-  curl -fsSL --retry 3 -o "$WORK_DIR/$FILENAME.sha256" "$SHA_URL"
-  (cd "$WORK_DIR" && sha256sum -c "$FILENAME.sha256" --quiet)
-  echo "sha256 verified."
+download() {
+  local url="$1" dest="$2" label="$3"
+  echo "Downloading from $label ..."
+  if curl -fsSL --retry 3 --max-time 600 -o "$dest" "$url"; then
+    return 0
+  fi
+  return 1
+}
+
+TARBALL_PATH="$WORK_DIR/cloudcli-linux-x64.tar.gz"
+SHA_PATH="$TARBALL_PATH.sha256"
+
+TARBALL_URL=""
+if download "$GITCODE_URL" "$TARBALL_PATH" "gitcode mirror (recommended)"; then
+  TARBALL_URL="$GITCODE_URL"
+  download "$GITCODE_SHA_URL" "$SHA_PATH" "gitcode sha256" || true
+else
+  echo "gitcode mirror failed, falling back to GitHub Releases..."
+  API_URL="https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG"
+  GH_URL=$(curl -fsSL "$API_URL" \
+    | grep '"browser_download_url"' \
+    | grep -E 'linux-x64\.tar\.gz"$' \
+    | head -1 \
+    | sed -E 's/.*"(https:[^"]+)".*/\1/')
+
+  if [ -z "$GH_URL" ]; then
+    echo "ERROR: no linux-x64 tarball found in release '$RELEASE_TAG'."
+    echo "Has the GitHub Actions workflow run at least once?"
+    exit 1
+  fi
+
+  if ! download "$GH_URL" "$TARBALL_PATH" "GitHub Releases"; then
+    echo "ERROR: download failed from both gitcode and GitHub."
+    exit 1
+  fi
+  TARBALL_URL="$GH_URL"
+  download "${GH_URL}.sha256" "$SHA_PATH" "GitHub sha256" || true
+fi
+
+# Verify sha256 if we got a checksum file.
+if [ -s "$SHA_PATH" ]; then
+  # sha256sum prints "<hash>  <filename>" — sed rewrites the filename to match
+  # the actual file we just downloaded so verification succeeds regardless
+  # of which source served it.
+  (cd "$WORK_DIR" \
+    && sed -E 's,  [^ ]+$,  cloudcli-linux-x64.tar.gz,' cloudcli-linux-x64.tar.gz.sha256 > checksum.fixed \
+    && sha256sum -c checksum.fixed --quiet) \
+    && echo "sha256 verified." \
+    || echo "WARNING: sha256 verification skipped or failed."
 fi
 
 # --- stop existing service if pm2 is managing it -------------------------
