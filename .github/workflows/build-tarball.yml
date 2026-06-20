@@ -224,13 +224,20 @@ jobs:
 
           echo "Extracting + restarting on ECS ..."
           ssh "${SSH_OPTS[@]}" "$USER_VAL@$ECS_HOST" 'bash -s' <<'REMOTE'
-          set -euo pipefail
+          set -uo pipefail
 
           # SSH non-interactive shells don't source ~/.bashrc, so nvm-installed
-          # globals (node, npm, pm2) aren't on PATH. Source nvm directly so
-          # `command -v pm2` finds it.
+          # globals (node, npm, pm2) aren't on PATH. Source nvm directly.
+          # Disable `set -e` for this block: nvm.sh prints a warning and
+          # returns non-zero if ~/.npmrc has a `prefix` or `globalconfig`
+          # setting, which would otherwise abort the whole deploy.
+          set +e
           export NVM_DIR="$HOME/.nvm"
-          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+          if [ -s "$NVM_DIR/nvm.sh" ]; then
+            \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+            nvm use default --silent >/dev/null 2>&1 || true
+          fi
+          set -e
 
           cd "$HOME"
 
