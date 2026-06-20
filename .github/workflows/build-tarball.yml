@@ -156,72 +156,61 @@ jobs:
             ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}.sha256
           prerelease: true
 
-      # Push the same tarball to gitcode's orphan `releases` branch so hosts
-      # in mainland China can `wget` from gitcode.com (much faster than
-      # github.com releases, which often times out from CN networks).
-      # Force-push keeps the branch a single commit — repo doesn't grow
-      # unboundedly with every build.
-      #
-      # NOTE: this step is best-effort. A 260MB push from a US Actions runner
-      # to a CN git host can stall for 10+ minutes on the "Writing objects"
-      # phase due to international bandwidth limits. We cap it with
-      # continue-on-error + a timeout so a slow sync never blocks the
-      # overall workflow (the GitHub release is already published).
-      - name: Sync tarball to gitcode (China mirror, best-effort)
-        continue-on-error: true
-        timeout-minutes: 8
+      # Upload the same tarball to gitcode via GitLab's Generic Packages API.
+      # Previous approach used `git push --force` to an orphan branch, but
+      # git's smart HTTP protocol funnels 260MB into a single pack stream
+      # that takes 10+ minutes (or stalls) from a US Actions runner to CN.
+      # HTTP PUT to the package registry uses chunked transfer with no git
+      # overhead, completes in ~2-3 minutes, and doesn't pollute the repo
+      # with orphan branches or bloated history.
+      - name: Sync tarball to gitcode (China mirror, GitLab package API)
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
           set -euo pipefail
-          # GitHub Actions' `if: ${{ secrets.X != '' }}` is unreliable; check
-          # inside the shell so an unset secret produces a clear log line
-          # instead of silently skipping the whole step.
           if [ -z "$GITCODE_TOKEN" ]; then
             echo "::warning::GITCODE_TOKEN secret is empty — skipping gitcode sync."
-            echo "Configure it in Settings → Secrets to enable China mirror."
             exit 0
           fi
 
-          git config --global user.email "actions@github.com"
-          git config --global user.name "github-actions[bot]"
+          # URL-encode the project path (xxjwulu/claudecodeui → xxjwulu%2Fclaudecodeui)
+          # for use in the API path.
+          PROJECT_ID=$(printf '%s' "xxjwulu/claudecodeui" | sed 's,/,%%2F,g')
+          API="https://gitcode.com/api/v4/projects/${PROJECT_ID}"
 
-          WORK="$(mktemp -d)"
-          echo "Cloning gitcode.com/xxjwulu/claudecodeui into $WORK ..."
-          # `--no-tags` and depth=1 keep the clone small; we'll force-push.
-          git clone --no-tags "https://x-access-token:${GITCODE_TOKEN}@gitcode.com/xxjwulu/claudecodeui.git" "$WORK"
-          cd "$WORK"
+          TAR="$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}"
+          SHA="$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}.sha256"
+          SIZE=$(stat -c%s "$TAR")
+          echo "Uploading $SIZE bytes to gitcode Generic Packages API ..."
 
-          # Fetch any existing releases branch so we can detect its presence.
-          git fetch origin releases:refs/remotes/origin/releases 2>/dev/null || true
-          if git rev-parse --verify --quiet refs/remotes/origin/releases >/dev/null; then
-            echo "Existing releases branch found, will replace it."
-          else
-            echo "No existing releases branch, creating new orphan."
+          # Upload the tarball. The URL is:
+          #   PUT /projects/:id/packages/generic/<pkg>/<version>/<filename>
+          # Re-uploading to the same version overwrites the previous file.
+          HTTP_CODE=$(
+            curl --silent --show-error --write-out '%{http_code}' --output /tmp/upload-resp.txt \
+              --request PUT \
+              --header "PRIVATE-TOKEN: $GITCODE_TOKEN" \
+              --header "Content-Type: application/octet-stream" \
+              --data-binary "@$TAR" \
+              "$API/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz" \
+              | tail -1
+          )
+          echo "Upload HTTP status: $HTTP_CODE"
+          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "204" ]; then
+            echo "Upload failed. Response body:"
+            cat /tmp/upload-resp.txt || true
+            exit 1
           fi
 
-          # Build a brand new orphan branch — this guarantees no carry-over
-          # from previous commits or from xxj_main default checkout.
-          git checkout --force --orphan releases
-          # Wipe the index and working tree, then re-add only our tarball.
-          rm -f .git/index
-          git clean -fdx >/dev/null
+          # Upload the sha256 alongside so the deploy script can verify.
+          curl --silent --show-error --fail \
+            --request PUT \
+            --header "PRIVATE-TOKEN: $GITCODE_TOKEN" \
+            --header "Content-Type: application/octet-stream" \
+            --data-binary "@$SHA" \
+            "$API/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz.sha256" \
+            > /dev/null
 
-          # Copy the freshly built tarball in with a stable filename so the
-          # download URL never changes between builds.
-          cp "$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}" "./cloudcli-linux-x64.tar.gz"
-          cp "$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}.sha256" "./cloudcli-linux-x64.tar.gz.sha256"
-
-          ls -lh cloudcli-linux-x64.tar.gz cloudcli-linux-x64.tar.gz.sha256
-
-          git add cloudcli-linux-x64.tar.gz cloudcli-linux-x64.tar.gz.sha256
-          git commit -m "Auto-release ${{ steps.pack.outputs.short_sha }}" --allow-empty
-
-          # Force-push so the branch always has one commit. Without --force
-          # the orphan-replace pattern would accumulate history.
-          # `--progress` is required because git hides transfer progress
-          # when stdout is not a TTY (i.e. CI). Without it a 260MB push
-          # to a CN git host looks completely stuck.
-          echo "Pushing to gitcode ..."
-          git push --force --progress origin releases 2>&1 | sed -u 's/^/[git-push] /'
-          echo "Sync complete."
+          echo "Upload complete."
+          echo "Download URL (auth required for private projects):"
+          echo "  $API/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz"

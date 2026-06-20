@@ -51,23 +51,28 @@ mkdir -p "$PARENT_DIR"
 
 # --- download tarball (China mirror first, GitHub fallback) ----------------
 #
-# gitcode.com hosts an orphan `releases` branch with a stable filename
-# `cloudcli-linux-x64.tar.gz` that is force-updated on every build. It is
-# dramatically faster than github.com from mainland CN networks.
-#
-# If gitcode is unreachable or the file 404s, fall back to GitHub Releases,
-# which carries the same tarball under a sha-tagged name.
+# gitcode.com hosts the tarball via GitLab's Generic Packages API:
+#   https://gitcode.com/api/v4/projects/<encoded-path>/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz
+# Much faster than github.com from mainland CN. For private repos, set
+# GITCODE_TOKEN env var (a Personal Access Token with at least read_api
+# scope) to authenticate.
 
 WORK_DIR="$(mktemp -d)"
 trap 'rm -rf "$WORK_DIR"' EXIT
 
-GITCODE_URL="https://${GITCODE_HOST}/$REPO/raw/releases/cloudcli-linux-x64.tar.gz"
-GITCODE_SHA_URL="https://${GITCODE_HOST}/$REPO/raw/releases/cloudcli-linux-x64.tar.gz.sha256"
+PROJECT_ID=$(printf '%s' "$REPO" | sed 's,/,%2F,g')
+GITCODE_API_BASE="https://${GITCODE_HOST}/api/v4/projects/${PROJECT_ID}"
+GITCODE_URL="${GITCODE_API_BASE}/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz"
+GITCODE_SHA_URL="${GITCODE_API_BASE}/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz.sha256"
 
 download() {
   local url="$1" dest="$2" label="$3"
   echo "Downloading from $label ..."
-  if curl -fsSL --retry 3 --max-time 600 -o "$dest" "$url"; then
+  local auth=()
+  if [ -n "$GITCODE_TOKEN" ]; then
+    auth=(--header "PRIVATE-TOKEN: $GITCODE_TOKEN")
+  fi
+  if curl -fsSL --retry 3 --max-time 600 "${auth[@]}" -o "$dest" "$url"; then
     return 0
   fi
   return 1
@@ -77,11 +82,11 @@ TARBALL_PATH="$WORK_DIR/cloudcli-linux-x64.tar.gz"
 SHA_PATH="$TARBALL_PATH.sha256"
 
 TARBALL_URL=""
-if download "$GITCODE_URL" "$TARBALL_PATH" "gitcode mirror (recommended)"; then
+if download "$GITCODE_URL" "$TARBALL_PATH" "gitcode package registry (recommended)"; then
   TARBALL_URL="$GITCODE_URL"
   download "$GITCODE_SHA_URL" "$SHA_PATH" "gitcode sha256" || true
 else
-  echo "gitcode mirror failed, falling back to GitHub Releases..."
+  echo "gitcode package registry failed, falling back to GitHub Releases..."
   API_URL="https://api.github.com/repos/$REPO/releases/tags/$RELEASE_TAG"
   GH_URL=$(curl -fsSL "$API_URL" \
     | grep '"browser_download_url"' \
@@ -105,9 +110,6 @@ fi
 
 # Verify sha256 if we got a checksum file.
 if [ -s "$SHA_PATH" ]; then
-  # sha256sum prints "<hash>  <filename>" — sed rewrites the filename to match
-  # the actual file we just downloaded so verification succeeds regardless
-  # of which source served it.
   (cd "$WORK_DIR" \
     && sed -E 's,  [^ ]+$,  cloudcli-linux-x64.tar.gz,' cloudcli-linux-x64.tar.gz.sha256 > checksum.fixed \
     && sha256sum -c checksum.fixed --quiet) \
