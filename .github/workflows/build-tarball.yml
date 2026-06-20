@@ -173,14 +173,29 @@ jobs:
           ECS_HOST: ${{ secrets.ECS_HOST }}
           ECS_USER: ${{ secrets.ECS_USER }}
           ECS_PORT: ${{ secrets.ECS_PORT }}
+          # Build the tarball path via env so ${{ }} substitution happens
+          # at GitHub Actions level, not inside bash string interpolation
+          # (which has caused weird interactions with secret masking).
+          TARBALL_PATH: ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}
         run: |
           set -euo pipefail
           if [ -z "$ECS_SSH_KEY" ] || [ -z "$ECS_HOST" ]; then
             echo "ECS_SSH_KEY or ECS_HOST secret not set — skipping deploy."
             exit 0
           fi
-          USER="${ECS_USER:-xxjwulu}"
+          USER_VAL="${ECS_USER:-xxjwulu}"
           PORT="${ECS_PORT:-22}"
+
+          # Diagnostic block — show what we're about to do without
+          # leaking the actual secret values. Length + existence + the
+          # last few files in the temp dir are enough to triage.
+          echo "::group::Debug: TARBALL_PATH inspection"
+          echo "TARBALL_PATH length: ${#TARBALL_PATH}"
+          echo "TARBALL_PATH exists as regular file: $([ -f "$TARBALL_PATH" ] && echo YES || echo NO)"
+          echo "TARBALL_PATH size (bytes): $(stat -c %s "$TARBALL_PATH" 2>/dev/null || echo 'stat failed')"
+          echo "RUNNER_TEMP listing (last 5 entries):"
+          ls -lh "$RUNNER_TEMP" | tail -5
+          echo "::endgroup::"
 
           # Write the private key to disk with safe perms.
           mkdir -p "$HOME/.ssh"
@@ -192,22 +207,17 @@ jobs:
 
           SSH_OPTS=(-i "$HOME/.ssh/ecs_deploy_key" -p "$PORT" -o ConnectTimeout=15)
 
-          TARBALL="$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}"
-          echo "Uploading $(du -h "$TARBALL" | cut -f1) to $USER@$ECS_HOST ..."
-          scp "${SSH_OPTS[@]}" "$TARBALL" "$USER@$ECS_HOST:/home/$USER/cloudcli-new.tar.gz"
+          echo "Uploading $(du -h "$TARBALL_PATH" | cut -f1) to ECS ..."
+          # scp -v gives verbose output if anything else goes wrong.
+          scp "${SSH_OPTS[@]}" "$TARBALL_PATH" "$USER_VAL@$ECS_HOST:/home/$USER_VAL/cloudcli-new.tar.gz"
 
-          echo "Extracting + restarting on $ECS_HOST ..."
-          # Run the remote extract/restart as the deploy user. Backs up the
-          # previous install before swapping, so a failed extract can be
-          # rolled back by `mv ~/cloudcli.bak.* ~/cloudcli`.
-          ssh "${SSH_OPTS[@]}" "$USER@$ECS_HOST" 'bash -s' <<'REMOTE'
+          echo "Extracting + restarting on ECS ..."
+          ssh "${SSH_OPTS[@]}" "$USER_VAL@$ECS_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
           cd "$HOME"
 
-          # Pre-flight: ensure the user owns the work dir.
           mkdir -p "$HOME/cloudcli"
 
-          # Backup the previous install if present.
           if [ -d cloudcli ] && [ ! -d cloudcli.bak ]; then
             mv cloudcli cloudcli.bak
           else
@@ -215,11 +225,9 @@ jobs:
           fi
           mkdir cloudcli
 
-          # The tarball's top-level dir is also `cloudcli/`; strip it.
           tar -xzf cloudcli-new.tar.gz -C cloudcli --strip-components=1
           rm -f cloudcli-new.tar.gz
 
-          # Hand off to pm2 if it's set up; otherwise print the run command.
           if command -v pm2 >/dev/null 2>&1; then
             if pm2 describe cloudcli >/dev/null 2>&1; then
               pm2 restart cloudcli || pm2 start "node $HOME/cloudcli/dist-server/server/index.js" --name cloudcli
