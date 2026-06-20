@@ -205,7 +205,11 @@ jobs:
           # Trust the host key so ssh doesn't prompt interactively.
           ssh-keyscan -p "$PORT" -H "$ECS_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
 
-          SSH_OPTS=(-i "$HOME/.ssh/ecs_deploy_key" -p "$PORT" -o ConnectTimeout=15)
+          # NB: scp uses -P (uppercase) for port, ssh uses -p (lowercase).
+          # `-o Port=N` works for BOTH, so we use that to avoid the case
+          # mismatch that previously caused scp to interpret "$PORT" as a
+          # local filename and fail with "stat local ***: No such file".
+          SSH_OPTS=(-i "$HOME/.ssh/ecs_deploy_key" -o "Port=$PORT" -o ConnectTimeout=15)
 
           echo "Uploading $(du -h "$TARBALL_PATH" | cut -f1) to ECS ..."
           # scp -v gives verbose output if anything else goes wrong.
