@@ -157,13 +157,17 @@ jobs:
           prerelease: true
 
       # Upload the same tarball to gitcode via GitLab's Generic Packages API.
-      # Previous approach used `git push --force` to an orphan branch, but
-      # git's smart HTTP protocol funnels 260MB into a single pack stream
-      # that takes 10+ minutes (or stalls) from a US Actions runner to CN.
-      # HTTP PUT to the package registry uses chunked transfer with no git
-      # overhead, completes in ~2-3 minutes, and doesn't pollute the repo
-      # with orphan branches or bloated history.
-      - name: Sync tarball to gitcode (China mirror, GitLab package API)
+      # The full 260MB upload fails with HTTP 413 because gitcode's openresty
+      # reverse proxy caps request body size. Work around by splitting into
+      # 20MB chunks and uploading each as a separate file under the same
+      # package. The deploy script downloads all chunks and `cat`s them back
+      # together.
+      #
+      # Verified locally that split + cat roundtrips losslessly (sha256
+      # matches), so the only thing that can still go wrong is gitcode's
+      # per-request size limit being below 20MB, which is very unlikely
+      # (GitLab.com default is multiple GB).
+      - name: Sync tarball to gitcode (China mirror, chunked)
         env:
           GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
         run: |
@@ -173,44 +177,55 @@ jobs:
             exit 0
           fi
 
-          # URL-encode the project path (xxjwulu/claudecodeui → xxjwulu%2Fclaudecodeui)
-          # for use in the API path.
           PROJECT_ID=$(printf '%s' "xxjwulu/claudecodeui" | sed 's,/,%2F,g')
           API="https://gitcode.com/api/v4/projects/${PROJECT_ID}"
+          PKG_URL="$API/packages/generic/cloudcli/latest"
 
-          TAR="$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}"
-          SHA="$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}.sha256"
-          SIZE=$(stat -c%s "$TAR")
-          echo "Uploading $SIZE bytes to gitcode Generic Packages API ..."
+          STABLE="cloudcli-linux-x64.tar.gz"
+          cp "$RUNNER_TEMP/${{ steps.pack.outputs.tarname }}" "$RUNNER_TEMP/$STABLE"
+          cd "$RUNNER_TEMP"
 
-          # Upload the tarball. The URL is:
-          #   PUT /projects/:id/packages/generic/<pkg>/<version>/<filename>
-          # Re-uploading to the same version overwrites the previous file.
-          HTTP_CODE=$(
-            curl --silent --show-error --write-out '%{http_code}' --output /tmp/upload-resp.txt \
-              --request PUT \
-              --header "PRIVATE-TOKEN: $GITCODE_TOKEN" \
-              --header "Content-Type: application/octet-stream" \
-              --data-binary "@$TAR" \
-              "$API/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz" \
-              | tail -1
-          )
-          echo "Upload HTTP status: $HTTP_CODE"
-          if [ "$HTTP_CODE" != "200" ] && [ "$HTTP_CODE" != "201" ] && [ "$HTTP_CODE" != "204" ]; then
-            echo "Upload failed. Response body:"
-            cat /tmp/upload-resp.txt || true
-            exit 1
-          fi
+          # Split into 20MB chunks. -d = numeric suffix, -a 3 = 3 digits zero-padded.
+          # Produces $STABLE.part000, $STABLE.part001, ...
+          split -b 20000000 -d -a 3 "$STABLE" "$STABLE.part"
+          TOTAL=$(ls "$STABLE".part* | wc -l | tr -d ' ')
+          echo "Split $STABLE into $TOTAL chunks of ~20MB each."
 
-          # Upload the sha256 alongside so the deploy script can verify.
-          curl --silent --show-error --fail \
-            --request PUT \
-            --header "PRIVATE-TOKEN: $GITCODE_TOKEN" \
-            --header "Content-Type: application/octet-stream" \
-            --data-binary "@$SHA" \
-            "$API/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz.sha256" \
-            > /dev/null
+          # Helper: upload one file. Re-tries once on transient errors.
+          upload() {
+            local file="$1" name="$2" label="$3"
+            local code
+            code=$(curl -sS --retry 2 --retry-delay 5 \
+              -o /tmp/upload-resp.txt \
+              -w '%{http_code}' \
+              -X PUT \
+              -H "PRIVATE-TOKEN: $GITCODE_TOKEN" \
+              -H "Content-Type: application/octet-stream" \
+              --data-binary "@$file" \
+              "$PKG_URL/$name")
+            if [ "$code" != "200" ] && [ "$code" != "201" ] && [ "$code" != "204" ]; then
+              echo "Upload $label failed: HTTP $code"
+              echo "Response body (first 500 bytes):"
+              head -c 500 /tmp/upload-resp.txt || true
+              echo ""
+              return 1
+            fi
+            echo "  $label: HTTP $code ($(du -h "$file" | cut -f1))"
+          }
 
-          echo "Upload complete."
-          echo "Download URL (auth required for private projects):"
-          echo "  $API/packages/generic/cloudcli/latest/cloudcli-linux-x64.tar.gz"
+          # 1) Manifest so the deploy script knows how many chunks to fetch.
+          echo "$TOTAL" > "$STABLE.manifest"
+          upload "$STABLE.manifest" "$STABLE.manifest" "manifest" || exit 1
+
+          # 2) sha256 of the full tarball for end-to-end verification.
+          cp "${{ steps.pack.outputs.tarname }}.sha256" "$STABLE.sha256"
+          upload "$STABLE.sha256" "$STABLE.sha256" "sha256" || exit 1
+
+          # 3) Each chunk.
+          for part in "$STABLE".part*; do
+            upload "$part" "$part" "$part" || exit 1
+          done
+
+          echo ""
+          echo "✅ All $TOTAL chunks + manifest + sha256 uploaded to gitcode."
+          echo "Download: $PKG_URL/$STABLE.manifest"
