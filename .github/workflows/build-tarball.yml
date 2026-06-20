@@ -225,6 +225,13 @@ jobs:
           echo "Extracting + restarting on ECS ..."
           ssh "${SSH_OPTS[@]}" "$USER_VAL@$ECS_HOST" 'bash -s' <<'REMOTE'
           set -euo pipefail
+
+          # SSH non-interactive shells don't source ~/.bashrc, so nvm-installed
+          # globals (node, npm, pm2) aren't on PATH. Source nvm directly so
+          # `command -v pm2` finds it.
+          export NVM_DIR="$HOME/.nvm"
+          [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh"
+
           cd "$HOME"
 
           mkdir -p "$HOME/cloudcli"
