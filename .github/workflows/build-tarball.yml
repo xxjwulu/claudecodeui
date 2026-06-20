@@ -1,0 +1,117 @@
+# Builds CloudCLI as a self-contained Linux x64 tarball (no Docker, no
+# install needed on the target host). Intended for small Aliyun ECS
+# instances that can't run `npm install` without IO starving.
+#
+# Output:
+#   - GitHub Actions artifact (90 days)
+#   - GitHub Release tagged `latest` (wget-able)
+#
+# Artifacts include compiled dist/, dist-server/, production node_modules/,
+# public/, shared/, server/ — everything `node dist-server/server/index.js`
+# needs to run.
+#
+# Trigger: push to xxj_main, or manual run from the Actions tab.
+
+name: Build Linux tarball
+
+on:
+  push:
+    branches: [xxj_main]
+  workflow_dispatch:
+
+concurrency:
+  group: tarball-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        env:
+          # Pull better-sqlite3's prebuilt linux-x64 binary from the China
+          # mirror so we don't fall back to compiling from source.
+          npm_config_better_sqlite3_binary_host_mirror: "https://registry.npmmirror.com/-/binary/better-sqlite3"
+        run: npm install --no-audit --no-fund
+
+      - name: Build client and server
+        run: npm run build
+
+      - name: Strip devDependencies
+        run: npm prune --omit=dev
+
+      - name: Stage runtime files
+        run: |
+          # Build a clean staging dir so the tarball has a single top-level
+          # `cloudcli/` directory — extraction yields /home/xxjwulu/cloudcli,
+          # not a mess of files dumped into the parent.
+          STAGE="$RUNNER_TEMP/cloudcli"
+          mkdir -p "$STAGE"
+
+          # Runtime-essential trees. Keep paths identical to the source repo
+          # so @/ alias resolution inside dist-server/ still works.
+          cp -r dist dist-server public shared server package.json "$STAGE/"
+          cp -r node_modules "$STAGE/node_modules"
+
+      - name: Pack tarball + sha256
+        id: pack
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TARNAME="cloudcli-${VERSION}-${SHORT_SHA}-linux-x64.tar.gz"
+
+          cd "$RUNNER_TEMP"
+          tar -czf "$TARNAME" cloudcli/
+          sha256sum "$TARNAME" > "$TARNAME.sha256"
+
+          ls -lh "$TARNAME"
+          echo "tarname=$TARNAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudcli-linux-x64
+          path: |
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}.sha256
+          retention-days: 90
+
+      - name: Publish to `latest` release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build (${{ steps.pack.outputs.short_sha }})
+          body: |
+            Auto-built from commit ${{ github.sha }}.
+
+            ## Deploy on Aliyun (one-liner)
+
+            ```bash
+            curl -fsSL https://raw.githubusercontent.com/xxjwulu/claudecodeui/xxj_main/scripts/deploy-on-linux.sh | bash
+            ```
+
+            ## Deploy manually
+
+            ```bash
+            wget https://github.com/xxjwulu/claudecodeui/releases/download/latest/${{ steps.pack.outputs.tarname }}
+            tar -xzf ${{ steps.pack.outputs.tarname }} -C $HOME
+            cd $HOME/cloudcli
+            node dist-server/server/index.js
+            ```
+          files: |
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}.sha256
+          prerelease: true
