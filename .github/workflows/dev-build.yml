@@ -262,8 +262,13 @@ jobs:
 
           # 将私钥写入文件并设置权限
           mkdir -p "$HOME/.ssh"
+          # 使用 printf 保留换行符，直接从环境变量写入
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
+
+          # 验证密钥格式
+          echo "验证密钥格式..."
+          head -1 "$HOME/.ssh/deploy_key"
 
           # 添加主机到 known_hosts 避免交互式提示
           ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
