@@ -280,66 +280,85 @@ jobs:
           scp "${SSH_OPTS[@]}" "$TARBALL" "$USER@$DEPLOY_HOST:$DEPLOY_PATH/dev-build-new.tar.gz"
 
           echo "在服务器上解压并更新..."
-          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" 'bash -s' << REMOTE_SCRIPT
-          set -euo pipefail
-          DEPLOY_DIR="$DEPLOY_PATH"
-          BUILD_FILE="\$DEPLOY_DIR/dev-build-new.tar.gz"
+          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+          set -uo pipefail
+
+          # SSH 非交互式 shell 不加载 ~/.bashrc，需要手动 source nvm
+          # 禁用 set -e 包裹 nvm 加载，因为 nvm.sh 可能返回非零
+          set +e
+          export NVM_DIR="$HOME/.nvm"
+          if [ -s "$NVM_DIR/nvm.sh" ]; then
+            \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+            nvm use default --silent >/dev/null 2>&1 || true
+          fi
+          set -e
+
+          DEPLOY_DIR="/opt/claudecodeui-builds"
+          BUILD_FILE="$DEPLOY_DIR/dev-build-new.tar.gz"
 
           echo "========================================"
           echo "🚀 开始部署更新"
           echo "========================================"
-          echo "📁 部署目录: \$DEPLOY_DIR"
+          echo "📁 部署目录: $DEPLOY_DIR"
 
-          cd "\$DEPLOY_DIR"
+          cd "$DEPLOY_DIR"
 
           # 检查构建包是否存在
-          if [ ! -f "\$BUILD_FILE" ]; then
+          if [ ! -f "$BUILD_FILE" ]; then
             echo "❌ 错误: 构建包不存在"
             exit 1
           fi
 
           echo "✅ 构建包已上传"
-          ls -lh "\$BUILD_FILE"
+          ls -lh "$BUILD_FILE"
 
           # 备份当前版本（如果有）
-          if [ -d "current" ]; then
+          if [ -d "current" ] && [ ! -d "current.bak" ]; then
             echo "💾 备份当前版本..."
-            BACKUP_NAME="backup-\$(date +%Y%m%d-%H%M%S)"
-            mv current "\$BACKUP_NAME"
-            # 只保留最近 3 个备份
-            ls -t | grep "^backup-" | tail -n +4 | xargs -r rm -rf 2>/dev/null || true
+            mv current current.bak
+          else
+            rm -rf current
           fi
+          mkdir -p current
 
           # 解压新版本
           echo "📦 解压新版本..."
-          tar -xzf "\$BUILD_FILE"
-
-          # 获取解压后的目录名
-          EXTRACTED_DIR=\$(tar -tzf "\$BUILD_FILE" | head -1 | cut -f1 -d'/')
-          mv "\$EXTRACTED_DIR" current
-          rm -f "\$BUILD_FILE"
+          tar -xzf "$BUILD_FILE" -C current --strip-components=1
+          rm -f "$BUILD_FILE"
 
           # 进入新版本目录
           cd current
 
           echo "✅ 解压完成"
           echo "📋 构建信息:"
-          cat BUILD_INFO.txt || echo "无构建信息"
+          cat BUILD_INFO.txt 2>/dev/null || echo "无构建信息"
 
-          # 安装依赖
-          echo ""
-          echo "📦 安装生产依赖..."
-          npm ci --omit=dev --no-audit 2>/dev/null || npm install --omit=dev --no-audit
+          # pm2 重启逻辑
+          if command -v pm2 >/dev/null 2>&1; then
+            if pm2 describe claudecodeui >/dev/null 2>&1; then
+              pm2 restart claudecodeui || pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui
+              pm2 save 2>/dev/null || true
+              echo "🔄 已通过 pm2 重启"
+            else
+              pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui
+              pm2 save 2>/dev/null || true
+              echo "🚀 已通过 pm2 启动"
+            fi
+          else
+            echo ""
+            echo "⚠️  pm2 未安装，请手动运行:"
+            echo "   cd $DEPLOY_DIR/current && node dist-server/server/index.js"
+          fi
 
           echo ""
           echo "========================================"
           echo "✅ 部署完成！"
           echo "========================================"
           echo ""
-          echo "📂 部署路径: \$DEPLOY_DIR/current"
+          echo "📂 部署路径: $DEPLOY_DIR/current"
           echo ""
           echo "🚀 启动服务:"
-          echo "   cd \$DEPLOY_DIR/current"
+          echo "   cd $DEPLOY_DIR/current"
           echo "   ./start-server.sh"
           echo "========================================"
           REMOTE_SCRIPT
