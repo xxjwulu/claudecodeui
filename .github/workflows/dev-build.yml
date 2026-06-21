@@ -241,105 +241,103 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      # 8. 设置部署变量
-      - name: Set deploy variables
+      # 8. 部署到远程服务器 (SCP + SSH)
+      # 参考生产环境 build-tarball.yml 的实现方式
+      - name: Deploy to remote server via SCP + SSH
         if: ${{ !github.event.inputs.skip_deploy }}
-        id: deploy-vars
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ env.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ env.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
         run: |
-          echo "host=${{ env.DEPLOY_HOST }}" >> $GITHUB_OUTPUT
-          echo "username=${{ env.DEPLOY_USER }}" >> $GITHUB_OUTPUT
-          echo "path=${{ env.DEPLOY_PATH }}" >> $GITHUB_OUTPUT
-          echo "port=${{ secrets.DEPLOY_PORT }}" >> $GITHUB_OUTPUT
+          set -euo pipefail
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ]; then
+            echo "DEPLOY_SSH_KEY 或 DEPLOY_HOST 未设置 — 跳过部署。"
+            exit 0
+          fi
+          USER="${DEPLOY_USER:-root}"
+          PORT="${DEPLOY_PORT:-22}"
 
-      # 9. 部署到远程服务器 (SCP)
-      - name: Deploy to remote server
-        if: ${{ !github.event.inputs.skip_deploy }}
-        uses: appleboy/scp-action@v0.1.7
-        with:
-          host: ${{ steps.deploy-vars.outputs.host }}
-          username: ${{ steps.deploy-vars.outputs.username }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ steps.deploy-vars.outputs.port || '22' }}
-          source: "dev-build-latest.tar.gz"
-          target: ${{ steps.deploy-vars.outputs.path }}
-          strip_components: 0
-          overwrite: true
-          rm: false
+          # 将私钥写入文件并设置权限
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
 
-      # 10. 在远程服务器解压并更新
-      - name: Extract and update on server
-        if: ${{ !github.event.inputs.skip_deploy }}
-        uses: appleboy/ssh-action@v1.0.3
-        with:
-          host: ${{ steps.deploy-vars.outputs.host }}
-          username: ${{ steps.deploy-vars.outputs.username }}
-          key: ${{ secrets.DEPLOY_SSH_KEY }}
-          port: ${{ steps.deploy-vars.outputs.port || '22' }}
-          script: |
-            set -e
+          # 添加主机到 known_hosts 避免交互式提示
+          ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
 
-            DEPLOY_DIR="/opt/claudecodeui-builds"
-            BUILD_FILE="$DEPLOY_DIR/dev-build-latest.tar.gz"
+          SSH_OPTS=(-i "$HOME/.ssh/deploy_key" -o Port="$PORT" -o ConnectTimeout=15)
 
-            echo "========================================"
-            echo "🚀 开始部署更新"
-            echo "========================================"
-            echo "📁 部署目录: $DEPLOY_DIR"
+          TARBALL="dev-build-latest.tar.gz"
+          echo "上传 $TARBALL 到 $USER@$DEPLOY_HOST ..."
+          scp "${SSH_OPTS[@]}" "$TARBALL" "$USER@$DEPLOY_HOST:$DEPLOY_PATH/dev-build-new.tar.gz"
 
-            # 进入部署目录
-            cd "$DEPLOY_DIR"
+          echo "在服务器上解压并更新..."
+          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" 'bash -s' << REMOTE_SCRIPT
+          set -euo pipefail
+          DEPLOY_DIR="$DEPLOY_PATH"
+          BUILD_FILE="\$DEPLOY_DIR/dev-build-new.tar.gz"
 
-            # 检查构建包是否存在
-            if [ ! -f "$BUILD_FILE" ]; then
-              echo "❌ 错误: 构建包不存在"
-              exit 1
-            fi
+          echo "========================================"
+          echo "🚀 开始部署更新"
+          echo "========================================"
+          echo "📁 部署目录: \$DEPLOY_DIR"
 
-            echo "✅ 构建包已上传"
-            ls -lh "$BUILD_FILE"
+          cd "\$DEPLOY_DIR"
 
-            # 备份当前版本（如果有）
-            if [ -d "current" ]; then
-              echo "💾 备份当前版本..."
-              BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S)"
-              mv current "$BACKUP_NAME"
-              # 只保留最近 3 个备份
-              ls -t | grep "^backup-" | tail -n +4 | xargs -r rm -rf
-            fi
+          # 检查构建包是否存在
+          if [ ! -f "\$BUILD_FILE" ]; then
+            echo "❌ 错误: 构建包不存在"
+            exit 1
+          fi
 
-            # 解压新版本
-            echo "📦 解压新版本..."
-            tar -xzf "$BUILD_FILE"
+          echo "✅ 构建包已上传"
+          ls -lh "\$BUILD_FILE"
 
-            # 获取解压后的目录名
-            EXTRACTED_DIR=$(tar -tzf "$BUILD_FILE" | head -1 | cut -f1 -d'/')
-            mv "$EXTRACTED_DIR" current
+          # 备份当前版本（如果有）
+          if [ -d "current" ]; then
+            echo "💾 备份当前版本..."
+            BACKUP_NAME="backup-\$(date +%Y%m%d-%H%M%S)"
+            mv current "\$BACKUP_NAME"
+            # 只保留最近 3 个备份
+            ls -t | grep "^backup-" | tail -n +4 | xargs -r rm -rf 2>/dev/null || true
+          fi
 
-            # 进入新版本目录
-            cd current
+          # 解压新版本
+          echo "📦 解压新版本..."
+          tar -xzf "\$BUILD_FILE"
 
-            echo "✅ 解压完成"
-            echo "📋 构建信息:"
-            cat BUILD_INFO.txt || echo "无构建信息"
+          # 获取解压后的目录名
+          EXTRACTED_DIR=\$(tar -tzf "\$BUILD_FILE" | head -1 | cut -f1 -d'/')
+          mv "\$EXTRACTED_DIR" current
+          rm -f "\$BUILD_FILE"
 
-            # 安装依赖
-            echo ""
-            echo "📦 安装生产依赖..."
-            npm ci --omit=dev --no-audit 2>/dev/null || npm install --omit=dev --no-audit
+          # 进入新版本目录
+          cd current
 
-            echo ""
-            echo "========================================"
-            echo "✅ 部署完成！"
-            echo "========================================"
-            echo ""
-            echo "📂 部署路径: $DEPLOY_DIR/current"
-            echo ""
-            echo "🚀 启动服务:"
-            echo "   cd $DEPLOY_DIR/current"
-            echo "   ./start-server.sh"
-            echo ""
-            echo "🌐 访问地址: http://$(hostname -I | awk '{print $1}'):3000"
-            echo "========================================"
+          echo "✅ 解压完成"
+          echo "📋 构建信息:"
+          cat BUILD_INFO.txt || echo "无构建信息"
+
+          # 安装依赖
+          echo ""
+          echo "📦 安装生产依赖..."
+          npm ci --omit=dev --no-audit 2>/dev/null || npm install --omit=dev --no-audit
+
+          echo ""
+          echo "========================================"
+          echo "✅ 部署完成！"
+          echo "========================================"
+          echo ""
+          echo "📂 部署路径: \$DEPLOY_DIR/current"
+          echo ""
+          echo "🚀 启动服务:"
+          echo "   cd \$DEPLOY_DIR/current"
+          echo "   ./start-server.sh"
+          echo "========================================"
+          REMOTE_SCRIPT
 
       # 10. 显示构建信息
       - name: Display build info
