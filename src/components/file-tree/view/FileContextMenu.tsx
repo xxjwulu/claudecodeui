@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Download, FileText, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+import { Copy, Download, ExternalLink, FileText, FileUp, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 type FileContextItem = {
@@ -53,6 +53,8 @@ export default function FileContextMenu({
   onRefresh,
   onCopyPath,
   onDownload,
+  onExtract,
+  onOpenInBrowser,
   isLoading = false,
   className = '',
 }: {
@@ -65,6 +67,8 @@ export default function FileContextMenu({
   onRefresh?: () => void;
   onCopyPath?: (item: FileContextItem) => void;
   onDownload?: (item: FileContextItem) => void;
+  onExtract?: (item: FileContextItem) => void;
+  onOpenInBrowser?: (item: FileContextItem) => void;
   isLoading?: boolean;
   className?: string;
 }) {
@@ -91,8 +95,50 @@ export default function FileContextMenu({
   }, [closeContextMenu]);
 
   const menuActions = useMemo<ContextMenuAction[]>(() => {
+    // Check if file is an archive
+    const isArchive = (filename: string): boolean => {
+      const lowerName = filename.toLowerCase();
+      return lowerName.endsWith('.zip') ||
+             lowerName.endsWith('.tar') ||
+             lowerName.endsWith('.tar.gz') ||
+             lowerName.endsWith('.tgz') ||
+             lowerName.endsWith('.tar.bz2') ||
+             lowerName.endsWith('.gz');
+    };
+
+    // Check if file can be opened in browser
+    const canOpenInBrowser = (filename: string): boolean => {
+      const lowerName = filename.toLowerCase();
+      return lowerName.endsWith('.html') ||
+             lowerName.endsWith('.htm') ||
+             lowerName.endsWith('.pdf') ||
+             lowerName.endsWith('.txt') ||
+             lowerName.endsWith('.md') ||
+             lowerName.endsWith('.json') ||
+             lowerName.endsWith('.js') ||
+             lowerName.endsWith('.css') ||
+             lowerName.endsWith('.svg') ||
+             lowerName.endsWith('.png') ||
+             lowerName.endsWith('.jpg') ||
+             lowerName.endsWith('.jpeg') ||
+             lowerName.endsWith('.gif') ||
+             lowerName.endsWith('.webp');
+    };
+
     if (item?.type === 'file') {
-      return [
+      const actions: ContextMenuAction[] = [];
+
+      // Open in browser action (for viewable files)
+      if (canOpenInBrowser(item.name)) {
+        actions.push({
+          key: 'open',
+          icon: ExternalLink,
+          label: t('fileTree.context.open', 'Open'),
+          onSelect: () => onOpenInBrowser?.(item),
+        });
+      }
+
+      actions.push(
         {
           key: 'rename',
           icon: Pencil,
@@ -118,8 +164,21 @@ export default function FileContextMenu({
           icon: Download,
           label: t('fileTree.context.download', 'Download'),
           onSelect: () => onDownload?.(item),
-        },
-      ];
+        }
+      );
+
+      // Extract action (for archive files)
+      if (isArchive(item.name)) {
+        actions.push({
+          key: 'extract',
+          icon: FileUp,
+          label: t('fileTree.context.extract', 'Extract'),
+          onSelect: () => onExtract?.(item),
+          showDividerBefore: true,
+        });
+      }
+
+      return actions;
     }
 
     if (item?.type === 'directory') {
@@ -187,7 +246,7 @@ export default function FileContextMenu({
         showDividerBefore: true,
       },
     ];
-  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, t]);
+  }, [item, onCopyPath, onDelete, onDownload, onExtract, onNewFile, onNewFolder, onOpenInBrowser, onRefresh, onRename, t]);
 
   useEffect(() => {
     if (!isMenuOpen) {

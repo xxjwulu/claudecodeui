@@ -27,6 +27,8 @@
   },
   "status": {
     "loading": "로딩 중...",
+      "open": "열기",
+      "extract": "압축 해제",
     "success": "성공",
     "error": "오류",
     "failed": "실패",
@@ -129,7 +131,9 @@
       "newFolder": "새 폴더",
       "refresh": "새로 고침",
       "menuLabel": "파일 컨텍스트 메뉴",
-      "loading": "로딩 중..."
+      "loading": "로딩 중...",
+      "open": "열기",
+      "extract": "압축 해제"
     }
   },
   "projectWizard": {

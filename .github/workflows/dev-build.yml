@@ -1,0 +1,395 @@
+name: Dev Build & Deploy
+
+# 开发环境构建并推送到指定服务器
+# 触发条件：推送到 xxj_dev 分支或手动触发
+on:
+  push:
+    branches:
+      - xxj_dev
+      - 'feat/**'
+      - 'dev/**'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '要构建的分支 (默认: xxj_dev)'
+        required: false
+        default: 'xxj_dev'
+        type: string
+      skip_deploy:
+        description: '跳过部署到服务器'
+        required: false
+        default: false
+        type: boolean
+
+# 环境变量配置
+env:
+  NODE_VERSION: '24'
+  BUILD_ENV: 'development'
+  # 默认服务器配置
+  DEPLOY_HOST: '47.86.201.113'
+  DEPLOY_USER: 'root'
+  DEPLOY_PATH: '/opt/claudecodeui-builds'
+
+jobs:
+  # 构建任务
+  build:
+    runs-on: ubuntu-latest
+    name: Build Development
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+          fetch-depth: 1
+
+      # 2. 设置 Node.js 环境
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: |
+          echo "📦 安装依赖..."
+          # 使用 npm install 代替 npm ci，避免 package.json 和 lock 文件不同步的问题
+          npm install --no-audit
+
+      # 4. 构建客户端
+      - name: Build Client
+        run: |
+          echo "🔨 构建客户端..."
+          npm run build:client
+          echo "✅ 客户端构建完成"
+
+      # 5. 构建服务端
+      - name: Build Server
+        run: |
+          echo "🔨 构建服务端..."
+          npm run build:server
+          echo "✅ 服务端构建完成"
+
+      # 6. 打包构建产物
+      - name: Package build artifacts
+        run: |
+          echo "📦 打包构建产物..."
+          # 创建发布目录
+          mkdir -p dev-build
+
+          # 复制必要文件
+          cp -r dist dev-build/
+          cp -r dist-server dev-build/
+          cp package.json dev-build/
+          cp package-lock.json dev-build/
+          cp -r server dev-build/
+          cp -r shared dev-build/
+          cp -r public dev-build/ 2>/dev/null || true
+
+          # 创建启动脚本
+          cat > dev-build/start-server.sh << 'EOF'
+          #!/bin/bash
+          # 开发环境启动脚本
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "🚀 启动 CloudCLI 开发服务器..."
+          echo "📁 目录: $SCRIPT_DIR"
+          echo "🔢 Node 版本: $(node -v)"
+          echo ""
+
+          # 检查 node_modules 是否存在
+          if [ ! -d "node_modules" ]; then
+            echo "📦 首次运行，安装依赖..."
+            npm ci --omit=dev --no-audit 2>/dev/null || npm install --omit=dev
+          fi
+
+          echo "🌐 启动服务器..."
+          echo "   访问地址: http://localhost:3000"
+          echo ""
+
+          # 启动服务器
+          exec node dist-server/server/index.js
+          EOF
+          chmod +x dev-build/start-server.sh
+
+          # 创建开发模式启动脚本（热重载）
+          cat > dev-build/start-dev.sh << 'EOF'
+          #!/bin/bash
+          # 开发模式启动
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "🚀 启动 CloudCLI 开发模式..."
+          echo "🔥 支持热重载"
+
+          # 检查 node_modules 是否存在
+          if [ ! -d "node_modules" ]; then
+            echo "📦 安装依赖..."
+            npm ci --no-audit
+          fi
+
+          npm run server:dev
+          EOF
+          chmod +x dev-build/start-dev.sh
+
+          # 创建快速部署脚本
+          cat > dev-build/deploy.sh << 'EOF'
+          #!/bin/bash
+          # 一键部署脚本
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "🚀 开始部署..."
+
+          # 如果作为服务运行，可以配置 systemd
+          if command -v systemctl &> /dev/null; then
+            echo "📝 如需配置 systemd 服务，请运行:"
+            echo "   sudo cp systemd/cloudcli.service /etc/systemd/system/"
+            echo "   sudo systemctl enable cloudcli"
+            echo "   sudo systemctl start cloudcli"
+          fi
+
+          echo ""
+          echo "✅ 部署准备完成！"
+          echo ""
+          echo "启动方式:"
+          echo "   1. 生产模式: ./start-server.sh"
+          echo "   2. 开发模式: ./start-dev.sh"
+          EOF
+          chmod +x dev-build/deploy.sh
+
+          # 创建版本信息文件
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          BUILD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          BUILD_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_MSG=$(git log -1 --pretty=%B | head -1)
+          echo "========================================" > dev-build/BUILD_INFO.txt
+          echo "CloudCLI 开发环境构建信息" >> dev-build/BUILD_INFO.txt
+          echo "========================================" >> dev-build/BUILD_INFO.txt
+          echo "构建时间: $BUILD_DATE" >> dev-build/BUILD_INFO.txt
+          echo "Git 分支: $BUILD_BRANCH" >> dev-build/BUILD_INFO.txt
+          echo "Git Commit: $BUILD_COMMIT" >> dev-build/BUILD_INFO.txt
+          echo "提交信息: $BUILD_MSG" >> dev-build/BUILD_INFO.txt
+          echo "构建来源: GitHub Actions" >> dev-build/BUILD_INFO.txt
+          echo "运行 ID: ${{ github.run_id }}" >> dev-build/BUILD_INFO.txt
+          echo "运行编号: ${{ github.run_number }}" >> dev-build/BUILD_INFO.txt
+          echo "工作流: ${{ github.workflow }}" >> dev-build/BUILD_INFO.txt
+          echo "触发事件: ${{ github.event_name }}" >> dev-build/BUILD_INFO.txt
+          echo "========================================" >> dev-build/BUILD_INFO.txt
+
+          # 创建快速启动说明
+          echo "========================================" > dev-build/README.txt
+          echo "CloudCLI 开发环境快速启动" >> dev-build/README.txt
+          echo "========================================" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "📥 首次使用:" >> dev-build/README.txt
+          echo "   1. 确保已安装 Node.js 22+" >> dev-build/README.txt
+          echo "   2. 运行: ./start-server.sh" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "🚀 启动方式:" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "   方式1 - 生产模式（推荐）:" >> dev-build/README.txt
+          echo "     ./start-server.sh" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "   方式2 - 开发模式（热重载）:" >> dev-build/README.txt
+          echo "     ./start-dev.sh" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "🌐 访问地址:" >> dev-build/README.txt
+          echo "   http://localhost:3000" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "📝 日志查看:" >> dev-build/README.txt
+          echo "   日志输出到控制台" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "🔧 其他命令:" >> dev-build/README.txt
+          echo "   安装依赖: npm ci" >> dev-build/README.txt
+          echo "   构建客户端: npm run build:client" >> dev-build/README.txt
+          echo "   构建服务端: npm run build:server" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "========================================" >> dev-build/README.txt
+
+          # 压缩打包
+          BUILD_NAME="dev-build-$(date +%Y%m%d-%H%M%S)"
+          mv dev-build "$BUILD_NAME"
+          tar -czf "$BUILD_NAME.tar.gz" "$BUILD_NAME/"
+
+          # 同时保留最新构建的固定名称
+          cp "$BUILD_NAME.tar.gz" dev-build-latest.tar.gz
+
+          echo "✅ 打包完成:"
+          echo "   - $BUILD_NAME.tar.gz (带时间戳)"
+          echo "   - dev-build-latest.tar.gz (固定名称，用于自动部署)"
+          echo ""
+          ls -lh *.tar.gz
+
+      # 7. 上传构建产物到 GitHub Artifact
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-build-${{ github.run_number }}
+          path: |
+            dev-build-*.tar.gz
+            !dev-build-latest.tar.gz
+          retention-days: 7
+          compression-level: 0
+
+      # 8. 设置部署变量
+      - name: Set deploy variables
+        if: ${{ !github.event.inputs.skip_deploy }}
+        id: deploy-vars
+        run: |
+          echo "host=${{ env.DEPLOY_HOST }}" >> $GITHUB_OUTPUT
+          echo "username=${{ env.DEPLOY_USER }}" >> $GITHUB_OUTPUT
+          echo "path=${{ env.DEPLOY_PATH }}" >> $GITHUB_OUTPUT
+          echo "port=${{ secrets.DEPLOY_PORT }}" >> $GITHUB_OUTPUT
+
+      # 9. 部署到远程服务器 (SCP)
+      - name: Deploy to remote server
+        if: ${{ !github.event.inputs.skip_deploy }}
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ steps.deploy-vars.outputs.host }}
+          username: ${{ steps.deploy-vars.outputs.username }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ steps.deploy-vars.outputs.port || '22' }}
+          source: "dev-build-latest.tar.gz"
+          target: ${{ steps.deploy-vars.outputs.path }}
+          strip_components: 0
+          overwrite: true
+          rm: false
+
+      # 10. 在远程服务器解压并更新
+      - name: Extract and update on server
+        if: ${{ !github.event.inputs.skip_deploy }}
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ steps.deploy-vars.outputs.host }}
+          username: ${{ steps.deploy-vars.outputs.username }}
+          key: ${{ secrets.DEPLOY_SSH_KEY }}
+          port: ${{ steps.deploy-vars.outputs.port || '22' }}
+          script: |
+            set -e
+
+            DEPLOY_DIR="/opt/claudecodeui-builds"
+            BUILD_FILE="$DEPLOY_DIR/dev-build-latest.tar.gz"
+
+            echo "========================================"
+            echo "🚀 开始部署更新"
+            echo "========================================"
+            echo "📁 部署目录: $DEPLOY_DIR"
+
+            # 进入部署目录
+            cd "$DEPLOY_DIR"
+
+            # 检查构建包是否存在
+            if [ ! -f "$BUILD_FILE" ]; then
+              echo "❌ 错误: 构建包不存在"
+              exit 1
+            fi
+
+            echo "✅ 构建包已上传"
+            ls -lh "$BUILD_FILE"
+
+            # 备份当前版本（如果有）
+            if [ -d "current" ]; then
+              echo "💾 备份当前版本..."
+              BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S)"
+              mv current "$BACKUP_NAME"
+              # 只保留最近 3 个备份
+              ls -t | grep "^backup-" | tail -n +4 | xargs -r rm -rf
+            fi
+
+            # 解压新版本
+            echo "📦 解压新版本..."
+            tar -xzf "$BUILD_FILE"
+
+            # 获取解压后的目录名
+            EXTRACTED_DIR=$(tar -tzf "$BUILD_FILE" | head -1 | cut -f1 -d'/')
+            mv "$EXTRACTED_DIR" current
+
+            # 进入新版本目录
+            cd current
+
+            echo "✅ 解压完成"
+            echo "📋 构建信息:"
+            cat BUILD_INFO.txt || echo "无构建信息"
+
+            # 安装依赖
+            echo ""
+            echo "📦 安装生产依赖..."
+            npm ci --omit=dev --no-audit 2>/dev/null || npm install --omit=dev --no-audit
+
+            echo ""
+            echo "========================================"
+            echo "✅ 部署完成！"
+            echo "========================================"
+            echo ""
+            echo "📂 部署路径: $DEPLOY_DIR/current"
+            echo ""
+            echo "🚀 启动服务:"
+            echo "   cd $DEPLOY_DIR/current"
+            echo "   ./start-server.sh"
+            echo ""
+            echo "🌐 访问地址: http://$(hostname -I | awk '{print $1}'):3000"
+            echo "========================================"
+
+      # 10. 显示构建信息
+      - name: Display build info
+        run: |
+          echo "========================================"
+          echo "✅ 开发环境构建完成！"
+          echo "========================================"
+          echo "📦 构建产物: dev-build-latest.tar.gz"
+          echo "🔢 构建编号: ${{ github.run_number }}"
+          echo "🌿 分支: $(git rev-parse --abbrev-ref HEAD)"
+          echo "📋 Commit: $(git rev-parse --short HEAD)"
+          echo "⏰ 时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "🌐 部署服务器: ${{ env.DEPLOY_HOST }}"
+          echo "📂 部署路径: ${{ env.DEPLOY_PATH }}"
+          echo ""
+          if [ "${{ github.event.inputs.skip_deploy }}" == "true" ]; then
+            echo "⚠️  本次构建已跳过部署"
+          else
+            echo "🚀 构建包已推送到服务器"
+            echo ""
+            echo "在服务器上执行以下命令启动:"
+            echo "   cd ${{ env.DEPLOY_PATH }}/current"
+            echo "   ./start-server.sh"
+          fi
+          echo "========================================"
+
+  # 代码检查任务（并行运行，不阻塞部署）
+  lint:
+    runs-on: ubuntu-latest
+    name: Code Quality Check
+    continue-on-error: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci --prefer-offline --no-audit
+
+      - name: Run ESLint
+        run: npm run lint 2>/dev/null || echo "⚠️ Lint 检查失败，但不阻塞构建"
+
+      - name: Type Check
+        run: npm run typecheck 2>/dev/null || echo "⚠️ 类型检查失败，但不阻塞构建"

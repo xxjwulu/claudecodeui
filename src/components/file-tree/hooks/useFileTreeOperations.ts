@@ -53,6 +53,8 @@ export type UseFileTreeOperationsResult = {
   // Other operations
   handleCopyPath: (item: FileTreeNode) => void;
   handleDownload: (item: FileTreeNode) => Promise<void>;
+  handleExtract: (item: FileTreeNode) => Promise<void>;
+  handleOpenInBrowser: (item: FileTreeNode) => void;
 
   // Loading state
   operationLoading: boolean;
@@ -338,6 +340,54 @@ export function useFileTreeOperations({
     showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
   }, [selectedProject, showToast, t, triggerBrowserDownload]);
 
+  // Extract archive file
+  const handleExtract = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    // Check if file is an archive
+    const ext = item.name.toLowerCase().split('.').pop() || '';
+    const isArchive = ['zip', 'tar', 'gz', 'tgz', 'bz2'].includes(ext) ||
+                      item.name.toLowerCase().endsWith('.tar.gz') ||
+                      item.name.toLowerCase().endsWith('.tar.bz2');
+
+    if (!isArchive) {
+      showToast(t('fileTree.toast.notArchive', 'Not a supported archive file'), 'error');
+      return;
+    }
+
+    setOperationLoading(true);
+    try {
+      const response = await api.extractFile(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to extract');
+      }
+
+      const result = await response.json();
+      showToast(t('fileTree.toast.extracted', 'Extracted to {{folder}}', { folder: result.extractTo }), 'success');
+      onRefresh();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
+    }
+  }, [selectedProject, showToast, t, onRefresh]);
+
+  // Open file in browser
+  const handleOpenInBrowser = useCallback((item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    if (item.type !== 'file') {
+      showToast(t('fileTree.toast.cannotOpen', 'Cannot open directories'), 'error');
+      return;
+    }
+
+    // Build the open URL
+    const openUrl = `/api/projects/${selectedProject.projectId}/files/open?path=${encodeURIComponent(item.path)}`;
+    window.open(openUrl, '_blank');
+  }, [selectedProject, showToast, t]);
+
   return {
     // Rename operations
     renamingItem,
@@ -366,6 +416,8 @@ export function useFileTreeOperations({
     // Other operations
     handleCopyPath,
     handleDownload,
+    handleExtract,
+    handleOpenInBrowser,
 
     // Loading state
     operationLoading,

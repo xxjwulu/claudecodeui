@@ -176,6 +176,17 @@ export const api = {
       headers: {}, // Let browser set Content-Type for FormData
     }),
 
+  // Extract archive files
+  extractFile: (projectId, filePath) =>
+    authenticatedFetch(`/api/projects/${projectId}/files/extract`, {
+      method: 'POST',
+      body: JSON.stringify({ filePath }),
+    }),
+
+  // Open file in browser
+  openFile: (projectId, filePath) =>
+    authenticatedFetch(`/api/projects/${projectId}/files/open?path=${encodeURIComponent(filePath)}`),
+
   // TaskMaster endpoints — all addressed by DB projectId post-migration.
   taskmaster: {
     // Initialize TaskMaster in a project

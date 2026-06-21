@@ -27,6 +27,8 @@
   },
   "status": {
     "loading": "読み込み中...",
+      "open": "開く",
+      "extract": "展開",
     "success": "成功",
     "error": "エラー",
     "failed": "失敗",
@@ -129,7 +131,9 @@
       "newFolder": "新しいフォルダ",
       "refresh": "更新",
       "menuLabel": "ファイルのコンテキストメニュー",
-      "loading": "読み込み中..."
+      "loading": "読み込み中...",
+      "open": "開く",
+      "extract": "展開"
     }
   },
   "projectWizard": {
