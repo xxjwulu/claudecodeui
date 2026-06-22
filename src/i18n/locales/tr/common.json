@@ -27,8 +27,6 @@
   },
   "status": {
     "loading": "Yükleniyor...",
-      "open": "Aç",
-      "extract": "Çıkart",
     "success": "Başarılı",
     "error": "Hata",
     "failed": "Başarısız",
@@ -131,9 +129,7 @@
       "newFolder": "Yeni Klasör",
       "refresh": "Yenile",
       "menuLabel": "Dosya bağlam menüsü",
-      "loading": "Yükleniyor...",
-      "open": "Aç",
-      "extract": "Çıkart"
+      "loading": "Yükleniyor..."
     }
   },
   "projectWizard": {

@@ -42,7 +42,7 @@ interface UseChatComposerStateArgs {
   isLoading: boolean;
   canAbortSession: boolean;
   tokenBudget: Record<string, unknown> | null;
-  sendMessage: (message: unknown) => void;
+  sendMessage: (message: unknown) => boolean;
   sendByCtrlEnter?: boolean;
   onSessionProcessing?: MarkSessionProcessing;
   /**
@@ -655,25 +655,6 @@ export function useChatComposerState({
         });
       }
 
-      const userMessage: ChatMessage = {
-        type: 'user',
-        content: currentInput,
-        images: uploadedImages as any,
-        timestamp: new Date(),
-      };
-
-      addMessage(userMessage);
-      // Mark this request as processing in the per-session activity map (the
-      // single source of truth the indicator derives from). The id is always
-      // concrete at this point — no pending placeholder exists anymore.
-      onSessionProcessing?.(targetSessionId, {
-        statusText: null,
-        canInterrupt: true,
-      });
-
-      setIsUserScrolledUp(false);
-      setTimeout(() => scrollToBottom(), 100);
-
       const getToolsSettings = () => {
         try {
           const settingsKey =
@@ -716,7 +697,13 @@ export function useChatComposerState({
       // One message shape for every provider. The backend resolves the
       // provider, project path, and provider-native resume id from the
       // session row; `options` only carries composer-level preferences.
-      sendMessage({
+      //
+      // Send BEFORE any UI side effects. If the websocket is not connected
+      // (e.g. mid-reconnect), `sendMessage` returns false and we bail out
+      // with an inline error instead of entering a permanent "loading"
+      // state — the user keeps their input draft and can retry once the
+      // socket comes back.
+      const sent = sendMessage({
         type: 'chat.send',
         sessionId: targetSessionId,
         content: messageContent,
@@ -731,6 +718,34 @@ export function useChatComposerState({
           images: uploadedImages,
         },
       });
+
+      if (!sent) {
+        addMessage({
+          type: 'error',
+          content: 'Connection lost. Reconnecting… please retry shortly.',
+          timestamp: new Date(),
+        });
+        return;
+      }
+
+      const userMessage: ChatMessage = {
+        type: 'user',
+        content: currentInput,
+        images: uploadedImages as any,
+        timestamp: new Date(),
+      };
+
+      addMessage(userMessage);
+      // Mark this request as processing in the per-session activity map (the
+      // single source of truth the indicator derives from). The id is always
+      // concrete at this point — no pending placeholder exists anymore.
+      onSessionProcessing?.(targetSessionId, {
+        statusText: null,
+        canInterrupt: true,
+      });
+
+      setIsUserScrolledUp(false);
+      setTimeout(() => scrollToBottom(), 100);
 
       setInput('');
       inputValueRef.current = '';
@@ -929,11 +944,19 @@ export function useChatComposerState({
 
     // The backend resolves the provider from the session row, so no provider
     // field is needed here.
-    sendMessage({
+    const sent = sendMessage({
       type: 'chat.abort',
       sessionId: targetSessionId,
     });
-  }, [canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
+
+    if (!sent) {
+      addMessage({
+        type: 'error',
+        content: 'Could not abort — connection lost. Reconnecting… please retry.',
+        timestamp: new Date(),
+      });
+    }
+  }, [addMessage, canAbortSession, currentSessionId, selectedSession?.id, sendMessage]);
 
   const handleGrantToolPermission = useCallback(
     (suggestion: { entry: string; toolName: string }) => {
@@ -956,8 +979,15 @@ export function useChatComposerState({
         return;
       }
 
+      // Send each decision; collect the ids that actually went out so we
+      // only dismiss prompts whose responses the backend will see. If the
+      // websocket is down, the prompt stays open and the user gets an
+      // inline error — otherwise the tool would hang forever waiting for
+      // an approval that never arrived.
+      const sentIds: string[] = [];
+      let anyFailed = false;
       validIds.forEach((requestId) => {
-        sendMessage({
+        const sent = sendMessage({
           type: 'chat.permission-response',
           requestId,
           allow: Boolean(decision?.allow),
@@ -965,13 +995,29 @@ export function useChatComposerState({
           message: decision?.message,
           rememberEntry: decision?.rememberEntry,
         });
+        if (sent) {
+          sentIds.push(requestId);
+        } else {
+          anyFailed = true;
+        }
       });
 
-      setPendingPermissionRequests((previous) =>
-        previous.filter((request) => !validIds.includes(request.requestId)),
-      );
+      if (anyFailed) {
+        addMessage({
+          type: 'error',
+          content: 'Could not send permission response — connection lost. Reconnecting… please retry.',
+          timestamp: new Date(),
+        });
+      }
+
+      // Only dismiss prompts whose responses were actually sent.
+      if (sentIds.length > 0) {
+        setPendingPermissionRequests((previous) =>
+          previous.filter((request) => !sentIds.includes(request.requestId)),
+        );
+      }
     },
-    [sendMessage, setPendingPermissionRequests],
+    [addMessage, sendMessage, setPendingPermissionRequests],
   );
 
   const [isInputFocused, setIsInputFocused] = useState(false);

@@ -21,7 +21,14 @@ type ServerEventListener = (event: ServerEvent) => void;
 
 type WebSocketContextType = {
   ws: WebSocket | null;
-  sendMessage: (message: unknown) => void;
+  /**
+   * Sends a frame over the websocket. Returns `true` when the frame was
+   * handed to an OPEN socket, `false` when the socket is missing or not
+   * open (e.g. mid-reconnect). Callers MUST surface the `false` case to
+   * the user instead of entering a "waiting for reply" state, otherwise
+   * the UI hangs forever with no feedback.
+   */
+  sendMessage: (message: unknown) => boolean;
   /**
    * Subscribes to every websocket frame. Returns an unsubscribe function.
    *
@@ -151,13 +158,14 @@ const useWebSocketProviderState = (): WebSocketContextType => {
     }
   }, [token, dispatch]); // everytime token changes, we reconnect
 
-  const sendMessage = useCallback((message: unknown) => {
+  const sendMessage = useCallback((message: unknown): boolean => {
     const socket = wsRef.current;
     if (socket && socket.readyState === WebSocket.OPEN) {
       socket.send(JSON.stringify(message));
-    } else {
-      console.warn('WebSocket not connected');
+      return true;
     }
+    console.warn('WebSocket not connected');
+    return false;
   }, []);
 
   const subscribe = useCallback((listener: ServerEventListener) => {

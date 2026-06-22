@@ -26,8 +26,6 @@
   },
   "status": {
     "loading": "Chargement...",
-      "open": "Ouvrir",
-      "extract": "Extraire",
     "success": "Succès",
     "error": "Erreur",
     "failed": "Échec",
@@ -130,9 +128,7 @@
       "newFolder": "Nouveau dossier",
       "refresh": "Actualiser",
       "menuLabel": "Menu contextuel du fichier",
-      "loading": "Chargement...",
-      "open": "Ouvrir",
-      "extract": "Extraire"
+      "loading": "Chargement..."
     }
   },
   "projectWizard": {

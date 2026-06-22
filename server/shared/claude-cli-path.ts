@@ -5,6 +5,14 @@ import path from 'node:path';
 const DEFAULT_CLAUDE_COMMAND = 'claude';
 const CLAUDE_SCRIPT_EXTENSIONS = new Set(['.cjs', '.js', '.jsx', '.mjs', '.ts', '.tsx']);
 const CLAUDE_WRAPPER_SEGMENTS = ['node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'] as const;
+/**
+ * Standard location of the JS launcher shipped by the npm package
+ * `@anthropic-ai/claude-code`. When the native `claude.exe` is absent (i.e.
+ * Claude Code was installed via `npm install -g` rather than the native
+ * installer), the SDK still works if it is handed the `cli.js` path —
+ * internally it detects the `.js` extension and spawns `node cli.js ...`.
+ */
+const CLAUDE_JS_LAUNCHER_SEGMENTS = ['node_modules', '@anthropic-ai', 'claude-code', 'cli.js'] as const;
 
 export type ResolveClaudeCodeExecutablePathDependencies = {
   execFileSync?: typeof execFileSync;
@@ -52,6 +60,34 @@ function resolveClaudeWrapperBinary(
 
   const matches = content.matchAll(/["']([^"'\\\r\n]*claude\.exe)["']/gi);
   for (const match of matches) {
+    const rawTarget = match[1]
+      .replace(/^\$basedir[\\/]/i, '')
+      .replace(/^%dp0%[\\/]/i, '')
+      .replace(/^%~dp0[\\/]/i, '');
+    const normalizedTarget = rawTarget.replace(/[\\/]/g, pathApi.sep);
+    const candidate = pathApi.isAbsolute(normalizedTarget)
+      ? normalizedTarget
+      : pathApi.resolve(pathApi.dirname(wrapperPath), normalizedTarget);
+
+    if (deps.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  // Fallback: Claude Code installed via npm (no native binary). Hand the JS
+  // launcher to the SDK — it detects the `.js` extension and runs it through
+  // `node`. Try the standard npm layout first, then parse the wrapper for
+  // any cli.js reference in case the package lives elsewhere.
+  const jsLauncherCandidate = pathApi.resolve(
+    pathApi.dirname(wrapperPath),
+    ...CLAUDE_JS_LAUNCHER_SEGMENTS,
+  );
+  if (deps.existsSync(jsLauncherCandidate)) {
+    return jsLauncherCandidate;
+  }
+
+  const jsMatches = content.matchAll(/["']([^"'\\\r\n]*@anthropic-ai[\\/][^"'\\\r\n]*cli\.js)["']/gi);
+  for (const match of jsMatches) {
     const rawTarget = match[1]
       .replace(/^\$basedir[\\/]/i, '')
       .replace(/^%dp0%[\\/]/i, '')
@@ -117,6 +153,106 @@ function resolveWindowsClaudeExecutablePath(
   }
 
   return configuredPath;
+}
+
+/**
+ * Well-known git-bash locations on Windows. Claude Code (>=2.x) requires
+ * git-bash on Windows and refuses to start without one in PATH or pointed
+ * to by CLAUDE_CODE_GIT_BASH_PATH. When git is installed on a non-C: drive
+ * (or otherwise not on PATH for the spawned subprocess), the user would
+ * otherwise see "Claude Code on Windows requires git-bash" and have to
+ * configure the env var manually.
+ */
+const GIT_BASH_KNOWN_LOCATIONS = [
+  'C:\\Program Files\\Git\\bin\\bash.exe',
+  'C:\\Program Files\\Git\\usr\\bin\\bash.exe',
+  'C:\\Program Files (x86)\\Git\\bin\\bash.exe',
+  'C:\\Program Files (x86)\\Git\\usr\\bin\\bash.exe',
+] as const;
+
+export type ResolveGitBashPathDependencies =
+  ResolveClaudeCodeExecutablePathDependencies;
+
+/**
+ * Resolves the git-bash binary path on Windows. Returns `null` on non-Windows
+ * platforms or when no bash.exe can be found.
+ *
+ * Resolution order:
+ *   1. The existing `CLAUDE_CODE_GIT_BASH_PATH` env var (already configured).
+ *   2. `where.exe bash.exe` PATH lookup.
+ *   3. Well-known install locations (covers git on a non-C: drive where the
+ *      subprocess may not have the parent's PATH).
+ *
+ * The result is memoized for the process lifetime — git-bash doesn't move
+ * while the server is running, and this function is called per chat message.
+ * Tests bypass the cache via `dependencies.platform` (returning 'linux' short
+ * -circuits before the cache is read or written).
+ */
+let cachedGitBashPath: string | null | undefined;
+
+export function resolveGitBashPath(
+  dependencies: ResolveGitBashPathDependencies = {},
+): string | null {
+  const deps: Required<ResolveGitBashPathDependencies> = {
+    execFileSync: dependencies.execFileSync ?? execFileSync,
+    existsSync: dependencies.existsSync ?? fs.existsSync,
+    platform: dependencies.platform ?? process.platform,
+    readFileSync: dependencies.readFileSync ?? fs.readFileSync,
+  };
+
+  if (deps.platform !== 'win32') {
+    return null;
+  }
+
+  // Only real (no-dependency-overrides) calls are cached. Tests inject
+  // existsSync/execFileSync mocks, so caching them would leak between cases.
+  const usesDefaultDeps =
+    dependencies.existsSync === undefined &&
+    dependencies.execFileSync === undefined;
+  if (usesDefaultDeps && cachedGitBashPath !== undefined) {
+    return cachedGitBashPath;
+  }
+
+  const result = resolveGitBashPathUncached(deps);
+
+  if (usesDefaultDeps) {
+    cachedGitBashPath = result;
+  }
+  return result;
+}
+
+function resolveGitBashPathUncached(
+  deps: Required<ResolveGitBashPathDependencies>,
+): string | null {
+  const configured = process.env.CLAUDE_CODE_GIT_BASH_PATH;
+  if (configured && deps.existsSync(configured)) {
+    return configured;
+  }
+
+  try {
+    const stdout = deps.execFileSync('where.exe', ['bash.exe'], {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+    const pathCandidate = stdout
+      .split(/\r?\n/)
+      .map((entry) => entry.trim())
+      .find(Boolean);
+    if (pathCandidate && deps.existsSync(pathCandidate)) {
+      return pathCandidate;
+    }
+  } catch {
+    // `where` returns non-zero when nothing is found; fall through to known locations.
+  }
+
+  for (const candidate of GIT_BASH_KNOWN_LOCATIONS) {
+    if (deps.existsSync(candidate)) {
+      return candidate;
+    }
+  }
+
+  return null;
 }
 
 export function resolveClaudeCodeExecutablePath(

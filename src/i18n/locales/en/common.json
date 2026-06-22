@@ -120,19 +120,6 @@
     "newFolder": "New Folder (Cmd+Shift+N)",
     "refresh": "Refresh",
     "collapseAll": "Collapse All",
-    "toast": {
-      "renamed": "Renamed successfully",
-      "folderDeleted": "Folder deleted",
-      "fileDeleted": "File deleted",
-      "fileCreated": "File created successfully",
-      "folderCreated": "Folder created successfully",
-      "pathCopied": "Path copied to clipboard",
-      "copyFailed": "Failed to copy path",
-      "folderDownloaded": "Folder downloaded as ZIP",
-      "extracted": "Extracted to {{folder}}",
-      "notArchive": "Not a supported archive file",
-      "cannotOpen": "Cannot open directories"
-    },
     "context": {
       "rename": "Rename",
       "delete": "Delete",
@@ -142,9 +129,7 @@
       "newFolder": "New Folder",
       "refresh": "Refresh",
       "menuLabel": "File context menu",
-      "loading": "Loading...",
-      "open": "Open",
-      "extract": "Extract"
+      "loading": "Loading..."
     }
   },
   "projectWizard": {

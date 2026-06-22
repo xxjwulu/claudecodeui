@@ -6,6 +6,7 @@ import pty, { type IPty } from 'node-pty';
 import { WebSocket, type RawData } from 'ws';
 
 import { parseIncomingJsonObject } from '@/shared/utils.js';
+import { resolveGitBashPath } from '@/shared/claude-cli-path.js';
 
 type ShellIncomingMessage = {
   type?: string;
@@ -285,13 +286,28 @@ export function handleShellConnection(
         const termCols = readNumber(data.cols, 80);
         const termRows = readNumber(data.rows, 24);
 
+        // Build a clean env for the spawned shell. When CloudCLI's server
+        // itself runs inside a Claude Code session (CLAUDECODE is set),
+        // agent-backed shells that re-launch Claude Code would otherwise
+        // abort with "cannot be launched inside another Claude Code
+        // session". On Windows, also auto-resolve git-bash so a non-C:
+        // git install doesn't break Claude Code (>=2.x) startup.
+        const shellEnv: NodeJS.ProcessEnv = { ...process.env };
+        delete shellEnv.CLAUDECODE;
+        if (process.platform === 'win32' && !shellEnv.CLAUDE_CODE_GIT_BASH_PATH) {
+          const gitBash = resolveGitBashPath();
+          if (gitBash) {
+            shellEnv.CLAUDE_CODE_GIT_BASH_PATH = gitBash;
+          }
+        }
+
         shellProcess = pty.spawn(shell, shellArgs, {
           name: 'xterm-256color',
           cols: termCols,
           rows: termRows,
           cwd: resolvedProjectPath,
           env: {
-            ...process.env,
+            ...shellEnv,
             TERM: 'xterm-256color',
             COLORTERM: 'truecolor',
             FORCE_COLOR: '3',

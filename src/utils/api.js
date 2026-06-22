@@ -1,7 +1,58 @@
 import { IS_PLATFORM } from "../constants/config";
 
-// Utility function for authenticated API calls
-export const authenticatedFetch = (url, options = {}) => {
+/**
+ * Error thrown by `authenticatedFetch` when the server returns a non-2xx
+ * response. The message is parsed from the JSON body when possible
+ * (`{ error: "..." }` / `{ message: "..." }`) so callers can surface a
+ * useful message via `alert(err.message)` without each site re-implementing
+ * the same body-parsing logic.
+ */
+export class HttpError extends Error {
+  constructor(status, statusText, body, url) {
+    const message = HttpError.extractMessage(body) || `Request failed (${status} ${statusText})`;
+    super(message);
+    this.name = 'HttpError';
+    this.status = status;
+    this.statusText = statusText;
+    this.body = body;
+    this.url = url;
+  }
+
+  static extractMessage(body) {
+    if (!body) return null;
+    if (typeof body === 'string') return body.trim() || null;
+    if (typeof body === 'object') {
+      return body.error || body.message || body.errorMessage || null;
+    }
+    return null;
+  }
+}
+
+/**
+ * Reads the response body once, tolerating both JSON and text error pages
+ * (e.g. HTML 502 from a reverse proxy). Never throws — the caller wraps
+ * the result in an HttpError.
+ */
+async function readErrorBody(response) {
+  const contentType = response.headers.get('content-type') || '';
+  try {
+    if (contentType.includes('application/json')) {
+      return await response.json();
+    }
+    const text = await response.text();
+    // HTML error pages etc. — trim to keep the message short.
+    return text.length > 500 ? `${text.slice(0, 500)}…` : text;
+  } catch {
+    return null;
+  }
+}
+
+// Utility function for authenticated API calls.
+// Throws HttpError on non-2xx responses so callers cannot silently miss
+// failures. Existing callers that already check `response.ok` keep working
+// (their branch just becomes unreachable); callers that forgot to check
+// now hit a thrown error their catch block can surface to the user.
+export const authenticatedFetch = async (url, options = {}) => {
   const token = localStorage.getItem('auth-token');
 
   const defaultHeaders = {};
@@ -15,24 +66,32 @@ export const authenticatedFetch = (url, options = {}) => {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  return fetch(url, {
+  const response = await fetch(url, {
     ...options,
     headers: {
       ...defaultHeaders,
       ...options.headers,
     },
-  }).then((response) => {
-    const refreshedToken = response.headers.get('X-Refreshed-Token');
-    if (refreshedToken) {
-      localStorage.setItem('auth-token', refreshedToken);
-    }
-    return response;
   });
+
+  const refreshedToken = response.headers.get('X-Refreshed-Token');
+  if (refreshedToken) {
+    localStorage.setItem('auth-token', refreshedToken);
+  }
+
+  if (!response.ok) {
+    const body = await readErrorBody(response);
+    throw new HttpError(response.status, response.statusText, body, url);
+  }
+
+  return response;
 };
 
 // API endpoints
 export const api = {
-  // Auth endpoints (no token required)
+  // Auth endpoints (no token required). These intentionally use raw fetch
+  // because they run before a token exists; login/register handle 4xx
+  // themselves to render form-level validation messages.
   auth: {
     status: () => fetch('/api/auth/status'),
     login: (username, password) => fetch('/api/auth/login', {
@@ -175,17 +234,6 @@ export const api = {
       body: formData,
       headers: {}, // Let browser set Content-Type for FormData
     }),
-
-  // Extract archive files
-  extractFile: (projectId, filePath) =>
-    authenticatedFetch(`/api/projects/${projectId}/files/extract`, {
-      method: 'POST',
-      body: JSON.stringify({ filePath }),
-    }),
-
-  // Open file in browser
-  openFile: (projectId, filePath) =>
-    authenticatedFetch(`/api/projects/${projectId}/files/open?path=${encodeURIComponent(filePath)}`),
 
   // TaskMaster endpoints — all addressed by DB projectId post-migration.
   taskmaster: {

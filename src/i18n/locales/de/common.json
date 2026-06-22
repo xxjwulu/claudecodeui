@@ -27,8 +27,6 @@
   },
   "status": {
     "loading": "Lädt...",
-      "open": "Öffnen",
-      "extract": "Extrahieren",
     "success": "Erfolgreich",
     "error": "Fehler",
     "failed": "Fehlgeschlagen",
@@ -131,9 +129,7 @@
       "newFolder": "Neuer Ordner",
       "refresh": "Aktualisieren",
       "menuLabel": "Datei-Kontextmenü",
-      "loading": "Lädt...",
-      "open": "Öffnen",
-      "extract": "Extrahieren"
+      "loading": "Lädt..."
     }
   },
   "projectWizard": {

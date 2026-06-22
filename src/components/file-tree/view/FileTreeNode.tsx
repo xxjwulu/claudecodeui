@@ -20,8 +20,6 @@ type FileTreeNodeProps = {
   onNewFolder?: (path: string) => void;
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
-  onExtract?: (item: FileTreeNodeType) => void;
-  onOpenInBrowser?: (item: FileTreeNodeType) => void;
   onRefresh?: () => void;
   // Rename state for inline editing
   renamingItem?: FileTreeNodeType | null;
@@ -76,8 +74,6 @@ export default function FileTreeNode({
   onNewFolder,
   onCopyPath,
   onDownload,
-  onExtract,
-  onOpenInBrowser,
   onRefresh,
   renamingItem,
   renameValue,
@@ -182,7 +178,7 @@ export default function FileTreeNode({
   );
 
   // Check if context menu callbacks are provided
-  const hasContextMenu = onRename || onDelete || onNewFile || onNewFolder || onCopyPath || onDownload || onExtract || onOpenInBrowser || onRefresh;
+  const hasContextMenu = onRename || onDelete || onNewFile || onNewFolder || onCopyPath || onDownload || onRefresh;
 
   return (
     <div className="select-none">
@@ -195,8 +191,6 @@ export default function FileTreeNode({
           onNewFolder={onNewFolder}
           onCopyPath={onCopyPath}
           onDownload={onDownload}
-          onExtract={onExtract}
-          onOpenInBrowser={onOpenInBrowser}
           onRefresh={onRefresh}
         >
           {rowContent}
@@ -229,8 +223,6 @@ export default function FileTreeNode({
               onNewFolder={onNewFolder}
               onCopyPath={onCopyPath}
               onDownload={onDownload}
-              onExtract={onExtract}
-              onOpenInBrowser={onOpenInBrowser}
               onRefresh={onRefresh}
               renamingItem={renamingItem}
               renameValue={renameValue}

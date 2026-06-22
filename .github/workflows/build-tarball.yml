@@ -1,0 +1,277 @@
+# Builds CloudCLI as a self-contained Linux x64 tarball (no Docker, no
+# install needed on the target host). Intended for small Aliyun ECS
+# instances that can't run `npm install` without IO starving.
+#
+# Output:
+#   - GitHub Actions artifact (90 days)
+#   - GitHub Release tagged `latest` (wget-able)
+#
+# Artifacts include compiled dist/, dist-server/, production node_modules/,
+# public/, shared/, server/ — everything `node dist-server/server/index.js`
+# needs to run.
+#
+# Trigger: push to xxj_main, or manual run from the Actions tab.
+
+name: Build Linux tarball
+
+on:
+  push:
+    branches: [xxj_main]
+  workflow_dispatch:
+
+concurrency:
+  group: tarball-${{ github.ref }}
+  cancel-in-progress: true
+
+# softprops/action-gh-release needs contents: write to create/update
+# the rolling `latest` release. New repos default GITHUB_TOKEN to read-only,
+# which causes a silent 404 on the release API.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 24
+        uses: actions/setup-node@v4
+        with:
+          # CRITICAL: must match the major Node version on the deploy
+          # target. Native modules (better-sqlite3, bcrypt, node-pty,
+          # sharp) compile against a specific NODE_MODULE_VERSION / ABI,
+          # and the .node files won't load under a different major.
+          # If the host is on Node 22, change this to '22' (and ask
+          # the host to be on 22 too). Mixing majors = "Module did not
+          # self-register" at startup.
+          node-version: '24'
+          cache: 'npm'
+
+      - name: Install dependencies
+        env:
+          # Pull better-sqlite3's prebuilt linux-x64 binary from the China
+          # mirror so we don't fall back to compiling from source.
+          npm_config_better_sqlite3_binary_host_mirror: "https://registry.npmmirror.com/-/binary/better-sqlite3"
+        run: npm install --no-audit --no-fund
+
+      - name: Build client and server
+        run: npm run build
+
+      - name: Strip devDependencies
+        run: npm prune --omit=dev
+
+      - name: Trim node_modules cruft
+        run: |
+          # Strip documentation, tests, and other build-time-only files from
+          # node_modules. Saves ~80-100MB on this project's dep tree. None
+          # of these are needed at runtime.
+          find node_modules -type f \( \
+            -name '*.md' -o \
+            -name '*.markdown' -o \
+            -name '*.ts' -o \
+            -name '*.d.ts' -o \
+            -name '*.map' -o \
+            -name '*.tsx' -o \
+            -name 'LICENSE*' -o \
+            -name 'CHANGELOG*' \
+          \) -delete 2>/dev/null || true
+          find node_modules -type d \( \
+            -name 'test' -o \
+            -name 'tests' -o \
+            -name '__tests__' -o \
+            -name '__mocks__' -o \
+            -name 'docs' -o \
+            -name 'doc' -o \
+            -name 'examples' -o \
+            -name 'example' \
+          \) -exec rm -rf {} + 2>/dev/null || true
+          # Keep TypeScript source maps for our own dist-server (debugging),
+          # so don't touch dist-server/*.map.
+          echo "After trim: $(du -sh node_modules | cut -f1)"
+
+      - name: Stage runtime files
+        run: |
+          # Build a clean staging dir so the tarball has a single top-level
+          # `cloudcli/` directory — extraction yields /home/xxjwulu/cloudcli,
+          # not a mess of files dumped into the parent.
+          STAGE="$RUNNER_TEMP/cloudcli"
+          mkdir -p "$STAGE"
+
+          # Runtime-essential trees. Keep paths identical to the source repo
+          # so @/ alias resolution inside dist-server/ still works.
+          cp -r dist dist-server public shared server package.json "$STAGE/"
+          cp -r node_modules "$STAGE/node_modules"
+
+      - name: Pack tarball + sha256
+        id: pack
+        run: |
+          VERSION=$(node -p "require('./package.json').version")
+          SHORT_SHA="${GITHUB_SHA::7}"
+          TARNAME="cloudcli-${VERSION}-${SHORT_SHA}-linux-x64.tar.gz"
+
+          cd "$RUNNER_TEMP"
+          tar -czf "$TARNAME" cloudcli/
+          sha256sum "$TARNAME" > "$TARNAME.sha256"
+
+          ls -lh "$TARNAME"
+          echo "tarname=$TARNAME" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "short_sha=$SHORT_SHA" >> "$GITHUB_OUTPUT"
+
+      - name: Upload Actions artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cloudcli-linux-x64
+          path: |
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}.sha256
+          retention-days: 90
+
+      - name: Publish to `latest` release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: Latest build (${{ steps.pack.outputs.short_sha }})
+          body: |
+            Auto-built from commit ${{ github.sha }}.
+
+            ## Deploy (if SCP auto-deploy is configured)
+
+            Pushes to xxj_main auto-deploy to the configured ECS host via
+            SCP + SSH (see "Deploy to ECS" step). No manual action needed.
+
+            ## Manual deploy
+
+            ```bash
+            wget https://github.com/xxjwulu/claudecodeui/releases/download/latest/${{ steps.pack.outputs.tarname }}
+            tar -xzf ${{ steps.pack.outputs.tarname }} -C $HOME
+            cd $HOME/cloudcli
+            node dist-server/server/index.js
+            ```
+          files: |
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}
+            ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}.sha256
+          prerelease: true
+
+      # Direct SCP + SSH deploy from the GitHub Actions runner to the user's
+      # Aliyun ECS host. Bypasses all third-party storage / WAF issues —
+      # the runner SSHes in and pushes the tarball, then extracts on the
+      # remote side. Re-runs the cloudcli process via pm2 if installed.
+      #
+      # Setup (one-time):
+      #   1. Generate a dedicated deploy key on the ECS host:
+      #        ssh-keygen -t ed25519 -f ~/.ssh/cloudcli-deploy -N ""
+      #   2. Authorise it:
+      #        cat ~/.ssh/cloudcli-deploy.pub >> ~/.ssh/authorized_keys
+      #   3. In GitHub repo Settings → Secrets, add:
+      #        ECS_SSH_KEY     contents of ~/.ssh/cloudcli-deploy (private)
+      #        ECS_HOST        ECS public IP or hostname
+      #        ECS_USER        xxjwulu (the linux user cloudcli runs as)
+      #        ECS_PORT        22 (or custom port — optional, defaults to 22)
+      #
+      # If ECS_SSH_KEY / ECS_HOST are unset, the step is skipped gracefully.
+      - name: Deploy to ECS via SCP + SSH
+        env:
+          ECS_SSH_KEY: ${{ secrets.ECS_SSH_KEY }}
+          ECS_HOST: ${{ secrets.ECS_HOST }}
+          ECS_USER: ${{ secrets.ECS_USER }}
+          ECS_PORT: ${{ secrets.ECS_PORT }}
+          # Build the tarball path via env so ${{ }} substitution happens
+          # at GitHub Actions level, not inside bash string interpolation
+          # (which has caused weird interactions with secret masking).
+          TARBALL_PATH: ${{ runner.temp }}/${{ steps.pack.outputs.tarname }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ECS_SSH_KEY" ] || [ -z "$ECS_HOST" ]; then
+            echo "ECS_SSH_KEY or ECS_HOST secret not set — skipping deploy."
+            exit 0
+          fi
+          USER_VAL="${ECS_USER:-xxjwulu}"
+          PORT="${ECS_PORT:-22}"
+
+          # Diagnostic block — show what we're about to do without
+          # leaking the actual secret values. Length + existence + the
+          # last few files in the temp dir are enough to triage.
+          echo "::group::Debug: TARBALL_PATH inspection"
+          echo "TARBALL_PATH length: ${#TARBALL_PATH}"
+          echo "TARBALL_PATH exists as regular file: $([ -f "$TARBALL_PATH" ] && echo YES || echo NO)"
+          echo "TARBALL_PATH size (bytes): $(stat -c %s "$TARBALL_PATH" 2>/dev/null || echo 'stat failed')"
+          echo "RUNNER_TEMP listing (last 5 entries):"
+          ls -lh "$RUNNER_TEMP" | tail -5
+          echo "::endgroup::"
+
+          # Write the private key to disk with safe perms.
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$ECS_SSH_KEY" > "$HOME/.ssh/ecs_deploy_key"
+          chmod 600 "$HOME/.ssh/ecs_deploy_key"
+
+          # Trust the host key so ssh doesn't prompt interactively.
+          ssh-keyscan -p "$PORT" -H "$ECS_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
+
+          # NB: scp uses -P (uppercase) for port, ssh uses -p (lowercase).
+          # `-o Port=N` works for BOTH, so we use that to avoid the case
+          # mismatch that previously caused scp to interpret "$PORT" as a
+          # local filename and fail with "stat local ***: No such file".
+          SSH_OPTS=(-i "$HOME/.ssh/ecs_deploy_key" -o "Port=$PORT" -o ConnectTimeout=15)
+
+          echo "Uploading $(du -h "$TARBALL_PATH" | cut -f1) to ECS ..."
+          # scp -v gives verbose output if anything else goes wrong.
+          scp "${SSH_OPTS[@]}" "$TARBALL_PATH" "$USER_VAL@$ECS_HOST:/home/$USER_VAL/cloudcli-new.tar.gz"
+
+          echo "Extracting + restarting on ECS ..."
+          ssh "${SSH_OPTS[@]}" "$USER_VAL@$ECS_HOST" 'bash -s' <<'REMOTE'
+          set -uo pipefail
+
+          # SSH non-interactive shells don't source ~/.bashrc, so nvm-installed
+          # globals (node, npm, pm2) aren't on PATH. Source nvm directly.
+          # Disable `set -e` for this block: nvm.sh prints a warning and
+          # returns non-zero if ~/.npmrc has a `prefix` or `globalconfig`
+          # setting, which would otherwise abort the whole deploy.
+          set +e
+          export NVM_DIR="$HOME/.nvm"
+          if [ -s "$NVM_DIR/nvm.sh" ]; then
+            \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+            nvm use default --silent >/dev/null 2>&1 || true
+          fi
+          set -e
+
+          cd "$HOME"
+
+          mkdir -p "$HOME/cloudcli"
+
+          if [ -d cloudcli ] && [ ! -d cloudcli.bak ]; then
+            mv cloudcli cloudcli.bak
+          else
+            rm -rf cloudcli
+          fi
+          mkdir cloudcli
+
+          tar -xzf cloudcli-new.tar.gz -C cloudcli --strip-components=1
+          rm -f cloudcli-new.tar.gz
+
+          if command -v pm2 >/dev/null 2>&1; then
+            if pm2 describe cloudcli >/dev/null 2>&1; then
+              pm2 restart cloudcli || pm2 start "$HOME/cloudcli/dist-server/server/index.js" --name cloudcli
+              pm2 save 2>/dev/null || true
+              echo "Restarted via pm2."
+            else
+              # NB: don't wrap the path in quotes and don't prefix with
+              # `node` — pm2 auto-detects .js and uses the node interpreter.
+              # Passing "node /path/to/x.js" makes pm2 invoke /usr/bin/bash
+              # as the entry, which exits immediately and marks the process
+              # errored.
+              pm2 start "$HOME/cloudcli/dist-server/server/index.js" --name cloudcli
+              pm2 save 2>/dev/null || true
+              echo "Started via pm2."
+            fi
+          else
+            echo "pm2 not installed. Run manually:"
+            echo "  cd $HOME/cloudcli && node dist-server/server/index.js"
+          fi
+
+          echo "✅ Deployed to $HOME/cloudcli"
+          REMOTE

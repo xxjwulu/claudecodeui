@@ -3,6 +3,7 @@ import test from 'node:test';
 
 import {
   resolveClaudeCodeExecutablePath,
+  resolveGitBashPath,
   type ResolveClaudeCodeExecutablePathDependencies,
 } from '@/shared/claude-cli-path.js';
 
@@ -58,4 +59,53 @@ test('resolveClaudeCodeExecutablePath falls back to the configured command when 
   });
 
   assert.equal(resolved, 'claude');
+});
+
+test('resolveClaudeCodeExecutablePath falls back to the npm cli.js launcher when no native binary exists on Windows', () => {
+  const wrapperDir = 'C:\\Users\\me\\AppData\\Roaming\\npm';
+  const jsLauncherPath = `${wrapperDir}\\node_modules\\@anthropic-ai\\claude-code\\cli.js`;
+  const execFileSync = (() =>
+    `${wrapperDir}\\claude\r\n${wrapperDir}\\claude.cmd\r\n`) as unknown as ResolveClaudeCodeExecutablePathDependencies['execFileSync'];
+  const readFileSync = (() =>
+    `exec "$basedir/node_modules/@anthropic-ai/claude-code/cli.js" "$@"`) as unknown as ResolveClaudeCodeExecutablePathDependencies['readFileSync'];
+
+  const resolved = resolveClaudeCodeExecutablePath('claude', {
+    platform: 'win32',
+    execFileSync,
+    // No claude.exe exists anywhere — only the JS launcher does.
+    existsSync: (candidate) => candidate === jsLauncherPath,
+    readFileSync,
+  });
+
+  assert.equal(resolved, jsLauncherPath);
+});
+
+test('resolveGitBashPath returns null on non-Windows platforms', () => {
+  assert.equal(resolveGitBashPath({ platform: 'linux' }), null);
+});
+
+test('resolveGitBashPath prefers CLAUDE_CODE_GIT_BASH_PATH when set and existing', () => {
+  const configured = 'E:\\Program Files\\Git\\usr\\bin\\bash.exe';
+  process.env.CLAUDE_CODE_GIT_BASH_PATH = configured;
+  try {
+    const resolved = resolveGitBashPath({
+      platform: 'win32',
+      existsSync: (candidate) => candidate === configured,
+      // `where.exe` must not be called when the env var already resolves.
+      execFileSync: (() => { throw new Error('should not be called'); }) as unknown as ResolveClaudeCodeExecutablePathDependencies['execFileSync'],
+    });
+    assert.equal(resolved, configured);
+  } finally {
+    delete process.env.CLAUDE_CODE_GIT_BASH_PATH;
+  }
+});
+
+test('resolveGitBashPath falls back to well-known install locations when where.exe finds nothing', () => {
+  const known = 'C:\\Program Files\\Git\\bin\\bash.exe';
+  const resolved = resolveGitBashPath({
+    platform: 'win32',
+    existsSync: (candidate) => candidate === known,
+    execFileSync: (() => { throw new Error('not found'); }) as unknown as ResolveClaudeCodeExecutablePathDependencies['execFileSync'],
+  });
+  assert.equal(resolved, known);
 });

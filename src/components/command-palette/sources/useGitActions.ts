@@ -3,11 +3,20 @@ import { useCallback } from 'react';
 import { authenticatedFetch } from '../../../utils/api';
 
 async function postGit(path: string, body: Record<string, unknown>) {
-  const res = await authenticatedFetch(path, {
-    method: 'POST',
-    body: JSON.stringify(body),
-  });
-  return res.json();
+  try {
+    const res = await authenticatedFetch(path, {
+      method: 'POST',
+      body: JSON.stringify(body),
+    });
+    return res.json();
+  } catch (err) {
+    // Command-palette callers invoke these with `void` and discard the
+    // promise, so the error must be surfaced here rather than re-thrown.
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[Git action] ${path} failed:`, message);
+    alert(message);
+    return { success: false, error: message };
+  }
 }
 
 export function useGitActions(projectId: string | undefined) {

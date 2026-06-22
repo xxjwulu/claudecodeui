@@ -172,6 +172,17 @@ async function handleChatSend(
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     console.error(`[Chat] Provider runtime "${provider}" failed`, { sessionId, error: message });
+    // Surface the runtime failure to the user as an in-conversation error.
+    // Without this, the spinner just stops with no explanation when a
+    // provider runtime throws (e.g. session locked by another process,
+    // missing credentials, misconfigured CLI, SDK rejection).
+    run.writer.send({
+      kind: 'error',
+      sessionId,
+      provider,
+      content: `Provider "${provider}" failed: ${message}`,
+      timestamp: new Date().toISOString(),
+    });
   } finally {
     // Safety net: a runtime that crashed (or resolved) without emitting its
     // terminal `complete` would otherwise leave the session stuck in

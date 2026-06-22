@@ -72,7 +72,9 @@ export function useWebPush(): WebPushState {
 
       setIsSubscribed(true);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('Push subscribe failed:', err);
+      alert(message);
     } finally {
       setIsLoading(false);
     }
@@ -93,7 +95,9 @@ export function useWebPush(): WebPushState {
       }
       setIsSubscribed(false);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error('Push unsubscribe failed:', err);
+      alert(message);
     } finally {
       setIsLoading(false);
     }

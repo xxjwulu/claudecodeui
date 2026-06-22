@@ -27,8 +27,6 @@
   },
   "status": {
     "loading": "載入中...",
-      "open": "開啟",
-      "extract": "解壓縮",
     "success": "成功",
     "error": "錯誤",
     "failed": "失敗",
@@ -131,9 +129,7 @@
       "newFolder": "新增資料夾",
       "refresh": "重新整理",
       "menuLabel": "檔案右鍵選單",
-      "loading": "載入中...",
-      "open": "開啟",
-      "extract": "解壓縮"
+      "loading": "載入中..."
     }
   },
   "projectWizard": {

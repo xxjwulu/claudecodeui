@@ -241,7 +241,9 @@ export function useGitPanelController({
         void fetchGitStatus();
         return true;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Error switching branch:', error);
+        alert(message);
         return false;
       }
     },
@@ -277,7 +279,9 @@ export function useGitPanelController({
         void fetchGitStatus();
         return true;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Error creating branch:', error);
+        alert(message);
         return false;
       } finally {
         setIsCreatingBranch(false);
@@ -428,8 +432,11 @@ export function useGitPanelController({
       }
 
       console.error('Publish failed:', data.error);
+      alert(String(data.error || 'Publish failed'));
     } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
       console.error('Error publishing branch:', error);
+      alert(message);
     } finally {
       setIsPublishing(false);
     }
@@ -458,8 +465,11 @@ export function useGitPanelController({
         }
 
         console.error('Discard failed:', data.error);
+        alert(String(data.error || 'Discard failed'));
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Error discarding changes:', error);
+        alert(message);
       }
     },
     [fetchGitStatus, selectedProject],
@@ -488,8 +498,11 @@ export function useGitPanelController({
         }
 
         console.error('Delete failed:', data.error);
+        alert(String(data.error || 'Delete failed'));
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Error deleting untracked file:', error);
+        alert(message);
       }
     },
     [fetchGitStatus, selectedProject],
@@ -596,9 +609,12 @@ export function useGitPanelController({
         }
 
         console.error('Commit failed:', data.error);
+        alert(String(data.error || 'Commit failed'));
         return false;
       } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
         console.error('Error committing changes:', error);
+        alert(message);
         return false;
       }
     },

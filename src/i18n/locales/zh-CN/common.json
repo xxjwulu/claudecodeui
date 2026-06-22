@@ -120,19 +120,6 @@
     "newFolder": "新建文件夹 (Cmd+Shift+N)",
     "refresh": "刷新",
     "collapseAll": "全部折叠",
-    "toast": {
-      "renamed": "重命名成功",
-      "folderDeleted": "文件夹已删除",
-      "fileDeleted": "文件已删除",
-      "fileCreated": "文件创建成功",
-      "folderCreated": "文件夹创建成功",
-      "pathCopied": "路径已复制到剪贴板",
-      "copyFailed": "复制路径失败",
-      "folderDownloaded": "文件夹已下载为ZIP",
-      "extracted": "已解压到 {{folder}}",
-      "notArchive": "不支持的压缩文件格式",
-      "cannotOpen": "无法打开文件夹"
-    },
     "context": {
       "rename": "重命名",
       "delete": "删除",
@@ -142,9 +129,7 @@
       "newFolder": "新建文件夹",
       "refresh": "刷新",
       "menuLabel": "文件上下文菜单",
-      "loading": "加载中...",
-      "open": "打开",
-      "extract": "解压"
+      "loading": "加载中..."
     }
   },
   "projectWizard": {
