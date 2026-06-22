@@ -52,7 +52,10 @@ export type UseFileTreeOperationsResult = {
 
   // Other operations
   handleCopyPath: (item: FileTreeNode) => void;
+  handleCopyShareUrl: (item: FileTreeNode) => Promise<void>;
   handleDownload: (item: FileTreeNode) => Promise<void>;
+  handleOpenFile: (item: FileTreeNode) => Promise<void>;
+  handleExtractZip: (item: FileTreeNode) => Promise<void>;
 
   // Loading state
   operationLoading: boolean;
@@ -338,6 +341,78 @@ export function useFileTreeOperations({
     showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
   }, [selectedProject, showToast, t, triggerBrowserDownload]);
 
+  // Open file in new tab (for HTML/PDF files)
+  const handleOpenFile = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    setOperationLoading(true);
+    try {
+      const response = await api.shareFile(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to generate share link');
+      }
+
+      const { shareUrl } = await response.json();
+      window.open(shareUrl, '_blank');
+      showToast(t('fileTree.toast.fileOpened', 'File opened in new tab'), 'success');
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
+    }
+  }, [selectedProject, showToast, t]);
+
+  // Copy file share URL to clipboard
+  const handleCopyShareUrl = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    try {
+      const response = await api.shareFile(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to generate share link');
+      }
+
+      const { shareUrl } = await response.json();
+      await navigator.clipboard.writeText(shareUrl);
+      showToast(t('fileTree.toast.shareUrlCopied', 'Share link copied to clipboard'), 'success');
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    }
+  }, [selectedProject, showToast, t]);
+
+  // Extract ZIP file
+  const handleExtractZip = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    // Check if it's a ZIP file
+    if (!item.name.toLowerCase().endsWith('.zip')) {
+      showToast(t('fileTree.toast.notAZipFile', 'This is not a ZIP file'), 'error');
+      return;
+    }
+
+    setOperationLoading(true);
+    try {
+      const response = await api.extractZip(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to extract ZIP file');
+      }
+
+      const result = await response.json();
+      showToast(result.message || t('fileTree.toast.extracted', 'ZIP extracted successfully'), 'success');
+      onRefresh();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
+    }
+  }, [selectedProject, showToast, t, onRefresh]);
+
   return {
     // Rename operations
     renamingItem,
@@ -365,7 +440,10 @@ export function useFileTreeOperations({
 
     // Other operations
     handleCopyPath,
+    handleCopyShareUrl,
     handleDownload,
+    handleOpenFile,
+    handleExtractZip,
 
     // Loading state
     operationLoading,

@@ -124,12 +124,29 @@
       "rename": "重命名",
       "delete": "删除",
       "copyPath": "复制路径",
+      "copyShareUrl": "复制分享链接",
       "download": "下载",
       "newFile": "新建文件",
       "newFolder": "新建文件夹",
       "refresh": "刷新",
       "menuLabel": "文件上下文菜单",
-      "loading": "加载中..."
+      "loading": "加载中...",
+      "open": "打开",
+      "extract": "解压"
+    },
+    "toast": {
+      "fileOpened": "文件已在新标签页打开",
+      "shareUrlCopied": "分享链接已复制到剪贴板",
+      "extracted": "ZIP文件解压成功",
+      "notAZipFile": "这不是ZIP文件",
+      "copyFailed": "复制路径失败",
+      "pathCopied": "路径已复制到剪贴板",
+      "renamed": "重命名成功",
+      "folderDeleted": "文件夹已删除",
+      "fileDeleted": "文件已删除",
+      "fileCreated": "文件创建成功",
+      "folderCreated": "文件夹创建成功",
+      "folderDownloaded": "文件夹已下载为ZIP"
     }
   },
   "projectWizard": {

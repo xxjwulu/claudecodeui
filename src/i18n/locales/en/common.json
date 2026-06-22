@@ -124,12 +124,29 @@
       "rename": "Rename",
       "delete": "Delete",
       "copyPath": "Copy Path",
+      "copyShareUrl": "Copy Share Link",
       "download": "Download",
       "newFile": "New File",
       "newFolder": "New Folder",
       "refresh": "Refresh",
       "menuLabel": "File context menu",
-      "loading": "Loading..."
+      "loading": "Loading...",
+      "open": "Open",
+      "extract": "Extract"
+    },
+    "toast": {
+      "fileOpened": "File opened in new tab",
+      "shareUrlCopied": "Share link copied to clipboard",
+      "extracted": "ZIP extracted successfully",
+      "notAZipFile": "This is not a ZIP file",
+      "copyFailed": "Failed to copy path",
+      "pathCopied": "Path copied to clipboard",
+      "renamed": "Renamed successfully",
+      "folderDeleted": "Folder deleted",
+      "fileDeleted": "File deleted",
+      "fileCreated": "File created successfully",
+      "folderCreated": "Folder created successfully",
+      "folderDownloaded": "Folder downloaded as ZIP"
     }
   },
   "projectWizard": {
