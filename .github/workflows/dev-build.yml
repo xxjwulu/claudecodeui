@@ -288,24 +288,8 @@ jobs:
           echo "上传 $TARBALL 到 $USER@$DEPLOY_HOST ..."
           scp "${SSH_OPTS[@]}" "$TARBALL" "$USER@$DEPLOY_HOST:$DEPLOY_PATH/dev-build-new.tar.gz"
 
-          # 创建远程部署日志
-          echo "创建部署日志..."
-          cat > /tmp/deploy-info.txt << EOF
-========================================
-部署信息
-========================================
-Git Commit: $BUILD_COMMIT
-Git Branch: $BUILD_BRANCH
-GitHub Run ID: $BUILD_RUN_ID
-GitHub Run Number: $BUILD_RUN_NUMBER
-部署时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
-部署来源: GitHub Actions
-========================================
-EOF
-          scp "${SSH_OPTS[@]}" /tmp/deploy-info.txt "$USER@$DEPLOY_HOST:$DEPLOY_PATH/"
-
           echo "在服务器上解压并更新..."
-          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" DEPLOY_DIR="$DEPLOY_PATH" BUILD_COMMIT="$BUILD_COMMIT" BUILD_BRANCH="$BUILD_BRANCH" BUILD_RUN_ID="$BUILD_RUN_ID" BUILD_RUN_NUMBER="$BUILD_RUN_NUMBER" 'bash -s' <<'REMOTE_SCRIPT'
+          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" DEPLOY_DIR="$DEPLOY_PATH" BUILD_COMMIT="$BUILD_COMMIT" BUILD_BRANCH="$BUILD_BRANCH" BUILD_RUN_ID="$BUILD_RUN_ID" BUILD_RUN_NUMBER="$BUILD_RUN_NUMBER" 'bash -s' << 'EOFSH'
           set -uo pipefail
 
           # 加载 nvm
@@ -391,7 +375,7 @@ EOF
           echo ""
           echo "📜 最近 3 次部署记录:"
           grep "🚀 开始部署\|✅ 部署完成\|❌ 错误" "$LOG_FILE" | tail -6
-          REMOTE_SCRIPT
+          EOFSH
 
           echo ""
           echo "✅ 部署完成！服务器日志位置: $DEPLOY_PATH/deploy.log"
