@@ -79,9 +79,8 @@ jobs:
           # 创建生产环境目录并安装依赖
           mkdir -p prod-node_modules
           cp package.json prod-node_modules/
-          cp package-lock.json prod-node_modules/
           cd prod-node_modules
-          npm ci --omit=dev --no-audit
+          npm install --omit=dev --no-audit
           cd ..
           echo "✅ 生产依赖安装完成"
           du -sh prod-node_modules/node_modules
