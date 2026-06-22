@@ -72,20 +72,38 @@ jobs:
           npm run build:server
           echo "✅ 服务端构建完成"
 
-      # 6. 安装生产依赖到本地目录
-      - name: Install production dependencies
+      # 6. 安装依赖
+      - name: Install dependencies
         run: |
-          echo "📦 安装生产依赖到本地目录..."
-          # 创建生产环境目录并安装依赖
-          mkdir -p prod-node_modules
-          cp package.json prod-node_modules/
-          cd prod-node_modules
-          npm install --omit=dev --no-audit
-          cd ..
-          echo "✅ 生产依赖安装完成"
-          du -sh prod-node_modules/node_modules
+          echo "📦 安装依赖..."
+          # Pull better-sqlite3's prebuilt linux-x64 binary from the China mirror
+          # so we don't fall back to compiling from source.
+          export npm_config_better_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/better-sqlite3"
+          npm install --no-audit --no-fund
 
-      # 7. 打包构建产物
+      # 7. 构建客户端
+      - name: Build Client
+        run: |
+          echo "🔨 构建客户端..."
+          npm run build:client
+          echo "✅ 客户端构建完成"
+
+      # 8. 构建服务端
+      - name: Build Server
+        run: |
+          echo "🔨 构建服务端..."
+          npm run build:server
+          echo "✅ 服务端构建完成"
+
+      # 9. 移除开发依赖
+      - name: Strip devDependencies
+        run: |
+          echo "🧹 移除开发依赖..."
+          npm prune --omit=dev
+          echo "✅ 开发依赖已移除"
+          du -sh node_modules
+
+      # 10. 打包构建产物
       - name: Package build artifacts
         run: |
           echo "📦 打包构建产物..."
@@ -103,7 +121,7 @@ jobs:
 
           # 复制生产依赖
           echo "📦 复制 node_modules..."
-          cp -r prod-node_modules/node_modules dev-build/
+          cp -r node_modules dev-build/
           du -sh dev-build/node_modules
 
           # 创建启动脚本
@@ -242,7 +260,7 @@ jobs:
           echo ""
           ls -lh *.tar.gz
 
-      # 8. 上传构建产物到 GitHub Artifact
+      # 11. 上传构建产物到 GitHub Artifact
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -253,7 +271,7 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      # 9. 部署到远程服务器 (SCP + SSH)
+      # 12. 部署到远程服务器 (SCP + SSH)
       # 参考生产环境 build-tarball.yml 的实现方式
       - name: Deploy to remote server via SCP + SSH
         if: ${{ !github.event.inputs.skip_deploy }}
@@ -375,7 +393,7 @@ jobs:
           echo "========================================"
           REMOTE_SCRIPT
 
-      # 11. 显示构建信息
+      # 13. 显示构建信息
       - name: Display build info
         run: |
           echo "========================================"
