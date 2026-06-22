@@ -49,14 +49,16 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: 'npm'
+          # cache: 'npm'  # 暂时禁用缓存，确保每次构建都是最新的
 
       # 3. 安装依赖
       - name: Install dependencies
         run: |
           echo "📦 安装依赖..."
-          # 使用 npm install 代替 npm ci，避免 package.json 和 lock 文件不同步的问题
-          npm install --no-audit
+          # Pull better-sqlite3's prebuilt linux-x64 binary from the China mirror
+          # so we don't fall back to compiling from source.
+          export npm_config_better_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/better-sqlite3"
+          npm install --no-audit --no-fund
 
       # 4. 构建客户端
       - name: Build Client
@@ -72,30 +74,7 @@ jobs:
           npm run build:server
           echo "✅ 服务端构建完成"
 
-      # 6. 安装依赖
-      - name: Install dependencies
-        run: |
-          echo "📦 安装依赖..."
-          # Pull better-sqlite3's prebuilt linux-x64 binary from the China mirror
-          # so we don't fall back to compiling from source.
-          export npm_config_better_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/better-sqlite3"
-          npm install --no-audit --no-fund
-
-      # 7. 构建客户端
-      - name: Build Client
-        run: |
-          echo "🔨 构建客户端..."
-          npm run build:client
-          echo "✅ 客户端构建完成"
-
-      # 8. 构建服务端
-      - name: Build Server
-        run: |
-          echo "🔨 构建服务端..."
-          npm run build:server
-          echo "✅ 服务端构建完成"
-
-      # 9. 移除开发依赖
+      # 6. 移除开发依赖
       - name: Strip devDependencies
         run: |
           echo "🧹 移除开发依赖..."
@@ -103,7 +82,7 @@ jobs:
           echo "✅ 开发依赖已移除"
           du -sh node_modules
 
-      # 10. 打包构建产物
+      # 7. 打包构建产物
       - name: Package build artifacts
         run: |
           echo "📦 打包构建产物..."
@@ -260,7 +239,7 @@ jobs:
           echo ""
           ls -lh *.tar.gz
 
-      # 11. 上传构建产物到 GitHub Artifact
+      # 8. 上传构建产物到 GitHub Artifact
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
         with:
@@ -271,7 +250,7 @@ jobs:
           retention-days: 7
           compression-level: 0
 
-      # 12. 部署到远程服务器 (SCP + SSH)
+      # 9. 部署到远程服务器 (SCP + SSH)
       # 参考生产环境 build-tarball.yml 的实现方式
       - name: Deploy to remote server via SCP + SSH
         if: ${{ !github.event.inputs.skip_deploy }}
@@ -393,7 +372,7 @@ jobs:
           echo "========================================"
           REMOTE_SCRIPT
 
-      # 13. 显示构建信息
+      # 10. 显示构建信息
       - name: Display build info
         run: |
           echo "========================================"
