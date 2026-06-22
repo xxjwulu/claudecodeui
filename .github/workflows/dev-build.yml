@@ -260,6 +260,11 @@ jobs:
           DEPLOY_USER: ${{ env.DEPLOY_USER }}
           DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
           DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          # 传递构建信息到远程脚本
+          BUILD_COMMIT: ${{ github.sha }}
+          BUILD_BRANCH: ${{ github.ref_name }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_NUMBER: ${{ github.run_number }}
         run: |
           set -euo pipefail
           if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ]; then
@@ -271,15 +276,10 @@ jobs:
 
           # 将私钥写入文件并设置权限
           mkdir -p "$HOME/.ssh"
-          # 使用 printf 保留换行符，直接从环境变量写入
           printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
           chmod 600 "$HOME/.ssh/deploy_key"
 
-          # 验证密钥格式
-          echo "验证密钥格式..."
-          head -1 "$HOME/.ssh/deploy_key"
-
-          # 添加主机到 known_hosts 避免交互式提示
+          # 添加主机到 known_hosts
           ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
 
           SSH_OPTS=(-i "$HOME/.ssh/deploy_key" -o Port="$PORT" -o ConnectTimeout=15)
@@ -288,12 +288,27 @@ jobs:
           echo "上传 $TARBALL 到 $USER@$DEPLOY_HOST ..."
           scp "${SSH_OPTS[@]}" "$TARBALL" "$USER@$DEPLOY_HOST:$DEPLOY_PATH/dev-build-new.tar.gz"
 
+          # 创建远程部署日志
+          echo "创建部署日志..."
+          cat > /tmp/deploy-info.txt << EOF
+========================================
+部署信息
+========================================
+Git Commit: $BUILD_COMMIT
+Git Branch: $BUILD_BRANCH
+GitHub Run ID: $BUILD_RUN_ID
+GitHub Run Number: $BUILD_RUN_NUMBER
+部署时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')
+部署来源: GitHub Actions
+========================================
+EOF
+          scp "${SSH_OPTS[@]}" /tmp/deploy-info.txt "$USER@$DEPLOY_HOST:$DEPLOY_PATH/"
+
           echo "在服务器上解压并更新..."
-          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" 'bash -s' <<'REMOTE_SCRIPT'
+          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" DEPLOY_DIR="$DEPLOY_PATH" BUILD_COMMIT="$BUILD_COMMIT" BUILD_BRANCH="$BUILD_BRANCH" BUILD_RUN_ID="$BUILD_RUN_ID" BUILD_RUN_NUMBER="$BUILD_RUN_NUMBER" 'bash -s' <<'REMOTE_SCRIPT'
           set -uo pipefail
 
-          # SSH 非交互式 shell 不加载 ~/.bashrc，需要手动 source nvm
-          # 禁用 set -e 包裹 nvm 加载，因为 nvm.sh 可能返回非零
+          # 加载 nvm
           set +e
           export NVM_DIR="$HOME/.nvm"
           if [ -s "$NVM_DIR/nvm.sh" ]; then
@@ -302,75 +317,84 @@ jobs:
           fi
           set -e
 
-          DEPLOY_DIR="/opt/claudecodeui-builds"
+          DEPLOY_DIR="${DEPLOY_DIR:-/opt/claudecodeui-builds}"
           BUILD_FILE="$DEPLOY_DIR/dev-build-new.tar.gz"
+          LOG_FILE="$DEPLOY_DIR/deploy.log"
 
-          echo "========================================"
-          echo "🚀 开始部署更新"
-          echo "========================================"
-          echo "📁 部署目录: $DEPLOY_DIR"
+          # 记录开始部署
+          echo "" >> "$LOG_FILE"
+          echo "========================================" >> "$LOG_FILE"
+          echo "🚀 开始部署 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+          echo "Git Commit: ${BUILD_COMMIT:-unknown}" >> "$LOG_FILE"
+          echo "Git Branch: ${BUILD_BRANCH:-unknown}" >> "$LOG_FILE"
+          echo "Run ID: ${BUILD_RUN_ID:-unknown}" >> "$LOG_FILE"
+          echo "Run Number: ${BUILD_RUN_NUMBER:-unknown}" >> "$LOG_FILE"
+          echo "========================================" >> "$LOG_FILE"
 
           cd "$DEPLOY_DIR"
 
-          # 检查构建包是否存在
+          # 检查构建包
           if [ ! -f "$BUILD_FILE" ]; then
-            echo "❌ 错误: 构建包不存在"
+            echo "❌ 错误: 构建包不存在" | tee -a "$LOG_FILE"
             exit 1
           fi
 
-          echo "✅ 构建包已上传"
-          ls -lh "$BUILD_FILE"
+          echo "✅ 构建包已上传: $(ls -lh "$BUILD_FILE" | awk '{print $5}')" | tee -a "$LOG_FILE"
 
-          # 备份当前版本（如果有）
-          if [ -d "current" ] && [ ! -d "current.bak" ]; then
-            echo "💾 备份当前版本..."
-            mv current current.bak
-          else
-            rm -rf current
+          # 备份当前版本
+          if [ -d "current" ]; then
+            BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S)"
+            echo "💾 备份当前版本到 $BACKUP_NAME..." | tee -a "$LOG_FILE"
+            mv current "$BACKUP_NAME"
+            # 只保留最近 3 个备份
+            ls -td backup-* 2>/dev/null | tail -n +4 | xargs -r rm -rf
           fi
           mkdir -p current
 
           # 解压新版本
-          echo "📦 解压新版本..."
+          echo "📦 解压新版本..." | tee -a "$LOG_FILE"
           tar -xzf "$BUILD_FILE" -C current --strip-components=1
           rm -f "$BUILD_FILE"
 
-          # 进入新版本目录
           cd current
 
-          echo "✅ 解压完成"
-          echo "📋 构建信息:"
-          cat BUILD_INFO.txt 2>/dev/null || echo "无构建信息"
+          echo "✅ 解压完成" | tee -a "$LOG_FILE"
+          echo "📋 构建信息:" | tee -a "$LOG_FILE"
+          cat BUILD_INFO.txt 2>/dev/null | tee -a "$LOG_FILE" || echo "无构建信息" | tee -a "$LOG_FILE"
 
-          # pm2 重启逻辑
+          # pm2 重启
+          echo "🔄 重启服务..." | tee -a "$LOG_FILE"
           if command -v pm2 >/dev/null 2>&1; then
             if pm2 describe claudecodeui >/dev/null 2>&1; then
-              pm2 restart claudecodeui || pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui
+              pm2 restart claudecodeui 2>&1 | tee -a "$LOG_FILE"
               pm2 save 2>/dev/null || true
-              echo "🔄 已通过 pm2 重启"
+              echo "✅ 已通过 pm2 重启" | tee -a "$LOG_FILE"
             else
-              pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui
+              pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui 2>&1 | tee -a "$LOG_FILE"
               pm2 save 2>/dev/null || true
-              echo "🚀 已通过 pm2 启动"
+              echo "🚀 已通过 pm2 启动" | tee -a "$LOG_FILE"
             fi
+
+            # 记录 pm2 状态
+            echo "" >> "$LOG_FILE"
+            echo "PM2 状态:" >> "$LOG_FILE"
+            pm2 show claudecodeui 2>/dev/null | head -20 >> "$LOG_FILE" || echo "无法获取 pm2 状态" >> "$LOG_FILE"
           else
-            echo ""
-            echo "⚠️  pm2 未安装，请手动运行:"
-            echo "   cd $DEPLOY_DIR/current && node dist-server/server/index.js"
+            echo "⚠️  pm2 未安装，请手动运行" | tee -a "$LOG_FILE"
           fi
 
+          echo "" >> "$LOG_FILE"
+          echo "✅ 部署完成 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+          echo "========================================" >> "$LOG_FILE"
+
+          # 显示最近 3 次部署记录
           echo ""
-          echo "========================================"
-          echo "✅ 部署完成！"
-          echo "========================================"
-          echo ""
-          echo "📂 部署路径: $DEPLOY_DIR/current"
-          echo ""
-          echo "🚀 启动服务:"
-          echo "   cd $DEPLOY_DIR/current"
-          echo "   ./start-server.sh"
-          echo "========================================"
+          echo "📜 最近 3 次部署记录:"
+          grep "🚀 开始部署\|✅ 部署完成\|❌ 错误" "$LOG_FILE" | tail -6
           REMOTE_SCRIPT
+
+          echo ""
+          echo "✅ 部署完成！服务器日志位置: $DEPLOY_PATH/deploy.log"
 
       # 10. 显示构建信息
       - name: Display build info
