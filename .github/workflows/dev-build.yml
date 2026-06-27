@@ -6,6 +6,7 @@ on:
   push:
     branches:
       - xxj_dev
+      - xxj_main
       - 'feat/**'
       - 'dev/**'
   workflow_dispatch:
