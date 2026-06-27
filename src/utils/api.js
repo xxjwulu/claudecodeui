@@ -235,6 +235,20 @@ export const api = {
       headers: {}, // Let browser set Content-Type for FormData
     }),
 
+  // Share file - generate a shareable URL for HTML/PDF files
+  shareFile: (projectId, filePath) =>
+    authenticatedFetch(`/api/projects/${projectId}/files/share`, {
+      method: 'POST',
+      body: JSON.stringify({ path: filePath }),
+    }),
+
+  // Extract ZIP file
+  extractZip: (projectId, zipPath) =>
+    authenticatedFetch(`/api/projects/${projectId}/files/extract`, {
+      method: 'POST',
+      body: JSON.stringify({ path: zipPath }),
+    }),
+
   // TaskMaster endpoints — all addressed by DB projectId post-migration.
   taskmaster: {
     // Initialize TaskMaster in a project

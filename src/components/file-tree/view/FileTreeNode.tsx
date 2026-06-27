@@ -21,6 +21,9 @@ type FileTreeNodeProps = {
   onCopyPath?: (item: FileTreeNodeType) => void;
   onDownload?: (item: FileTreeNodeType) => void;
   onRefresh?: () => void;
+  onOpen?: (item: FileTreeNodeType) => void;
+  onCopyShareUrl?: (item: FileTreeNodeType) => void;
+  onExtractZip?: (item: FileTreeNodeType) => void;
   // Rename state for inline editing
   renamingItem?: FileTreeNodeType | null;
   renameValue?: string;
@@ -75,6 +78,9 @@ export default function FileTreeNode({
   onCopyPath,
   onDownload,
   onRefresh,
+  onOpen,
+  onCopyShareUrl,
+  onExtractZip,
   renamingItem,
   renameValue,
   setRenameValue,
@@ -178,7 +184,7 @@ export default function FileTreeNode({
   );
 
   // Check if context menu callbacks are provided
-  const hasContextMenu = onRename || onDelete || onNewFile || onNewFolder || onCopyPath || onDownload || onRefresh;
+  const hasContextMenu = onRename || onDelete || onNewFile || onNewFolder || onCopyPath || onDownload || onRefresh || onOpen || onCopyShareUrl || onExtractZip;
 
   return (
     <div className="select-none">
@@ -192,6 +198,9 @@ export default function FileTreeNode({
           onCopyPath={onCopyPath}
           onDownload={onDownload}
           onRefresh={onRefresh}
+          onOpen={onOpen}
+          onCopyShareUrl={onCopyShareUrl}
+          onExtractZip={onExtractZip}
         >
           {rowContent}
         </FileContextMenu>
@@ -224,6 +233,9 @@ export default function FileTreeNode({
               onCopyPath={onCopyPath}
               onDownload={onDownload}
               onRefresh={onRefresh}
+              onOpen={onOpen}
+              onCopyShareUrl={onCopyShareUrl}
+              onExtractZip={onExtractZip}
               renamingItem={renamingItem}
               renameValue={renameValue}
               setRenameValue={setRenameValue}

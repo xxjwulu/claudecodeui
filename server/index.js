@@ -6,6 +6,7 @@ import path from 'path';
 import os from 'os';
 import http from 'http';
 import { spawn } from 'child_process';
+import crypto from 'crypto';
 
 import express from 'express';
 import cors from 'cors';
@@ -79,6 +80,25 @@ const installMode = fs.existsSync(path.join(APP_ROOT, '.git')) ? 'git' : 'npm';
 const MAX_FILE_UPLOAD_SIZE_MB = 200;
 const MAX_FILE_UPLOAD_SIZE_BYTES = MAX_FILE_UPLOAD_SIZE_MB * 1024 * 1024;
 const MAX_FILE_UPLOAD_COUNT = 20;
+
+// In-memory storage for file sharing codes (code -> { projectId, filePath, expiresAt })
+const fileShareCodes = new Map();
+const SHARE_CODE_EXPIRY_MS = 24 * 60 * 60 * 1000; // 24 hours
+
+// Generate a random share code
+function generateShareCode() {
+    return crypto.randomBytes(16).toString('hex');
+}
+
+// Clean up expired share codes periodically
+setInterval(() => {
+    const now = Date.now();
+    for (const [code, data] of fileShareCodes.entries()) {
+        if (data.expiresAt < now) {
+            fileShareCodes.delete(code);
+        }
+    }
+}, 60 * 60 * 1000); // Clean up every hour
 
 console.log('SERVER_PORT from env:', process.env.SERVER_PORT);
 
@@ -1136,6 +1156,219 @@ app.post('/api/projects/:projectId/upload-images', authenticateToken, async (req
     } catch (error) {
         console.error('Error in image upload endpoint:', error);
         res.status(500).json({ error: 'Internal server error' });
+    }
+});
+
+// ============================================================================
+// FILE SHARING AND EXTRACTION API ENDPOINTS
+// ============================================================================
+
+// POST /api/projects/:projectId/files/share - Generate a share code for a file
+app.post('/api/projects/:projectId/files/share', authenticateToken, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const { path: filePath } = req.body;
+
+        if (!filePath) {
+            return res.status(400).json({ error: 'File path is required' });
+        }
+
+        // Resolve the project root
+        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        // Validate path is within project
+        const resolved = path.isAbsolute(filePath)
+            ? path.resolve(filePath)
+            : path.resolve(projectRoot, filePath);
+        const normalizedRoot = path.resolve(projectRoot) + path.sep;
+        if (!resolved.startsWith(normalizedRoot)) {
+            return res.status(403).json({ error: 'Path must be under project root' });
+        }
+
+        // Check if file exists
+        try {
+            await fsPromises.access(resolved);
+        } catch {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        // Generate share code
+        const shareCode = generateShareCode();
+        const expiresAt = Date.now() + SHARE_CODE_EXPIRY_MS;
+
+        fileShareCodes.set(shareCode, {
+            projectId,
+            filePath: resolved,
+            relativePath: filePath,
+            expiresAt
+        });
+
+        // Construct share URL
+        const protocol = req.protocol;
+        const host = req.get('host');
+        const shareUrl = `${protocol}://${host}/api/files/shared/${shareCode}`;
+
+        res.json({
+            success: true,
+            shareCode,
+            shareUrl,
+            expiresAt: new Date(expiresAt).toISOString()
+        });
+    } catch (error) {
+        console.error('Error generating share code:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
+// GET /api/files/shared/:code - Serve a shared file by code (public access, no auth required)
+app.get('/api/files/shared/:code', async (req, res) => {
+    try {
+        const { code } = req.params;
+        const shareData = fileShareCodes.get(code);
+
+        if (!shareData) {
+            return res.status(404).json({ error: 'Share link not found or expired' });
+        }
+
+        if (shareData.expiresAt < Date.now()) {
+            fileShareCodes.delete(code);
+            return res.status(404).json({ error: 'Share link has expired' });
+        }
+
+        // Check if file exists
+        try {
+            await fsPromises.access(shareData.filePath);
+        } catch {
+            return res.status(404).json({ error: 'File not found' });
+        }
+
+        // Get file extension and set appropriate content type
+        const mimeType = mime.lookup(shareData.filePath) || 'application/octet-stream';
+        res.setHeader('Content-Type', mimeType);
+
+        // For HTML files, prevent them from being executed as scripts by setting CSP
+        if (mimeType === 'text/html') {
+            res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'none'; object-src 'none';");
+        }
+
+        // Stream the file
+        const fileStream = fs.createReadStream(shareData.filePath);
+        fileStream.pipe(res);
+
+        fileStream.on('error', (error) => {
+            console.error('Error streaming shared file:', error);
+            if (!res.headersSent) {
+                res.status(500).json({ error: 'Error reading file' });
+            }
+        });
+    } catch (error) {
+        console.error('Error serving shared file:', error);
+        if (!res.headersSent) {
+            res.status(500).json({ error: error.message });
+        }
+    }
+});
+
+// POST /api/projects/:projectId/files/extract - Extract a ZIP file
+app.post('/api/projects/:projectId/files/extract', authenticateToken, async (req, res) => {
+    try {
+        const { projectId } = req.params;
+        const { path: zipPath } = req.body;
+
+        if (!zipPath) {
+            return res.status(400).json({ error: 'ZIP file path is required' });
+        }
+
+        // Check if it's a ZIP file
+        if (!zipPath.toLowerCase().endsWith('.zip')) {
+            return res.status(400).json({ error: 'File must be a ZIP archive' });
+        }
+
+        // Resolve the project root
+        const projectRoot = await projectsDb.getProjectPathById(projectId);
+        if (!projectRoot) {
+            return res.status(404).json({ error: 'Project not found' });
+        }
+
+        // Validate path is within project
+        const resolvedZipPath = path.isAbsolute(zipPath)
+            ? path.resolve(zipPath)
+            : path.resolve(projectRoot, zipPath);
+        const normalizedRoot = path.resolve(projectRoot) + path.sep;
+        if (!resolvedZipPath.startsWith(normalizedRoot)) {
+            return res.status(403).json({ error: 'Path must be under project root' });
+        }
+
+        // Check if ZIP file exists
+        try {
+            await fsPromises.access(resolvedZipPath);
+        } catch {
+            return res.status(404).json({ error: 'ZIP file not found' });
+        }
+
+        // Determine extract directory (same name as ZIP without .zip extension)
+        const zipFileName = path.basename(zipPath, '.zip');
+        const zipDir = path.dirname(resolvedZipPath);
+        const extractDir = path.join(zipDir, zipFileName);
+
+        // Check if extract directory already exists
+        try {
+            await fsPromises.access(extractDir);
+            return res.status(409).json({ error: `Directory "${zipFileName}" already exists` });
+        } catch {
+            // Directory doesn't exist, which is what we want
+        }
+
+        // Create extract directory
+        await fsPromises.mkdir(extractDir, { recursive: true });
+
+        // Extract ZIP file using JSZip
+        const JSZip = (await import('jszip')).default;
+        const zipData = await fsPromises.readFile(resolvedZipPath);
+        const zip = await JSZip.loadAsync(zipData);
+
+        // Extract all entries
+        const extractPromises = [];
+        zip.forEach((relativePath, zipEntry) => {
+            const extractPath = path.join(extractDir, relativePath);
+
+            if (zipEntry.dir) {
+                // Create directory
+                extractPromises.push(
+                    fsPromises.mkdir(extractPath, { recursive: true }).catch(() => {})
+                );
+            } else {
+                // Extract file
+                extractPromises.push(
+                    (async () => {
+                        const content = await zipEntry.async('nodebuffer');
+                        // Ensure parent directory exists
+                        const parentDir = path.dirname(extractPath);
+                        await fsPromises.mkdir(parentDir, { recursive: true });
+                        await fsPromises.writeFile(extractPath, content);
+                    })()
+                );
+            }
+        });
+
+        await Promise.all(extractPromises);
+
+        res.json({
+            success: true,
+            message: `Extracted to "${zipFileName}"`,
+            extractPath: extractDir,
+            extractName: zipFileName
+        });
+    } catch (error) {
+        console.error('Error extracting ZIP file:', error);
+        if (error.message?.includes('adm-zip') || error.message?.includes('ADM-ZIP')) {
+            res.status(500).json({ error: 'Failed to extract ZIP file. The archive may be corrupted.' });
+        } else {
+            res.status(500).json({ error: error.message || 'Failed to extract ZIP file' });
+        }
     }
 });
 

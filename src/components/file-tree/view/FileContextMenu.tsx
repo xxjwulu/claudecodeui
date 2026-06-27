@@ -1,6 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Copy, Download, FileText, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
+import { Copy, Download, ExternalLink, FileText, FolderPlus, Pencil, RefreshCw, Trash2, type LucideIcon } from 'lucide-react';
 import { cn } from '../../../lib/utils';
 
 type FileContextItem = {
@@ -53,6 +53,9 @@ export default function FileContextMenu({
   onRefresh,
   onCopyPath,
   onDownload,
+  onOpen,
+  onCopyShareUrl,
+  onExtractZip,
   isLoading = false,
   className = '',
 }: {
@@ -65,6 +68,9 @@ export default function FileContextMenu({
   onRefresh?: () => void;
   onCopyPath?: (item: FileContextItem) => void;
   onDownload?: (item: FileContextItem) => void;
+  onOpen?: (item: FileContextItem) => void;
+  onCopyShareUrl?: (item: FileContextItem) => void;
+  onExtractZip?: (item: FileContextItem) => void;
   isLoading?: boolean;
   className?: string;
 }) {
@@ -92,7 +98,10 @@ export default function FileContextMenu({
 
   const menuActions = useMemo<ContextMenuAction[]>(() => {
     if (item?.type === 'file') {
-      return [
+      const isHtmlOrPdf = /\.(html?|pdf)$/i.test(item.name);
+      const isZip = /\.zip$/i.test(item.name);
+
+      const actions: ContextMenuAction[] = [
         {
           key: 'rename',
           icon: Pencil,
@@ -106,20 +115,49 @@ export default function FileContextMenu({
           onSelect: () => onDelete?.(item),
           isDanger: true,
         },
-        {
-          key: 'copyPath',
-          icon: Copy,
-          label: t('fileTree.context.copyPath', 'Copy Path'),
-          onSelect: () => onCopyPath?.(item),
-          showDividerBefore: true,
-        },
-        {
-          key: 'download',
-          icon: Download,
-          label: t('fileTree.context.download', 'Download'),
-          onSelect: () => onDownload?.(item),
-        },
       ];
+
+      // Add Open action for HTML/PDF files
+      if (isHtmlOrPdf) {
+        actions.push({
+          key: 'open',
+          icon: ExternalLink,
+          label: t('fileTree.context.open', 'Open'),
+          onSelect: () => onOpen?.(item),
+          showDividerBefore: true,
+        });
+      }
+
+      // Add Extract action for ZIP files
+      if (isZip) {
+        actions.push({
+          key: 'extract',
+          icon: ExternalLink,
+          label: t('fileTree.context.extract', 'Extract'),
+          onSelect: () => onExtractZip?.(item),
+          showDividerBefore: true,
+        });
+      }
+
+      // Copy path / share URL
+      actions.push({
+        key: 'copyPath',
+        icon: Copy,
+        label: isHtmlOrPdf
+          ? t('fileTree.context.copyShareUrl', 'Copy Share Link')
+          : t('fileTree.context.copyPath', 'Copy Path'),
+        onSelect: () => isHtmlOrPdf ? onCopyShareUrl?.(item) : onCopyPath?.(item),
+        showDividerBefore: true,
+      });
+
+      actions.push({
+        key: 'download',
+        icon: Download,
+        label: t('fileTree.context.download', 'Download'),
+        onSelect: () => onDownload?.(item),
+      });
+
+      return actions;
     }
 
     if (item?.type === 'directory') {
@@ -187,7 +225,7 @@ export default function FileContextMenu({
         showDividerBefore: true,
       },
     ];
-  }, [item, onCopyPath, onDelete, onDownload, onNewFile, onNewFolder, onRefresh, onRename, t]);
+  }, [item, onCopyPath, onCopyShareUrl, onDelete, onDownload, onExtractZip, onNewFile, onNewFolder, onOpen, onRefresh, onRename, t]);
 
   useEffect(() => {
     if (!isMenuOpen) {

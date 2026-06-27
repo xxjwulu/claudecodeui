@@ -1,0 +1,408 @@
+name: Dev Build & Deploy
+
+# 开发环境构建并推送到指定服务器
+# 触发条件：推送到 xxj_dev 分支或手动触发
+on:
+  push:
+    branches:
+      - xxj_dev
+      - 'feat/**'
+      - 'dev/**'
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: '要构建的分支 (默认: xxj_dev)'
+        required: false
+        default: 'xxj_dev'
+        type: string
+      skip_deploy:
+        description: '跳过部署到服务器'
+        required: false
+        default: false
+        type: boolean
+
+# 环境变量配置
+env:
+  NODE_VERSION: '24'
+  BUILD_ENV: 'development'
+  # 默认服务器配置
+  DEPLOY_HOST: '47.86.201.113'
+  DEPLOY_USER: 'root'
+  DEPLOY_PATH: '/opt/claudecodeui-builds'
+
+jobs:
+  # 构建任务
+  build:
+    runs-on: ubuntu-latest
+    name: Build Development
+
+    steps:
+      # 1. 检出代码
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.branch || github.ref }}
+          fetch-depth: 1
+
+      # 2. 设置 Node.js 环境
+      - name: Setup Node.js ${{ env.NODE_VERSION }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          # cache: 'npm'  # 暂时禁用缓存，确保每次构建都是最新的
+
+      # 3. 安装依赖
+      - name: Install dependencies
+        run: |
+          echo "📦 安装依赖..."
+          # Pull better-sqlite3's prebuilt linux-x64 binary from the China mirror
+          # so we don't fall back to compiling from source.
+          export npm_config_better_sqlite3_binary_host_mirror="https://registry.npmmirror.com/-/binary/better-sqlite3"
+          npm install --no-audit --no-fund
+
+      # 4. 构建客户端
+      - name: Build Client
+        run: |
+          echo "🔨 构建客户端..."
+          npm run build:client
+          echo "✅ 客户端构建完成"
+
+      # 5. 构建服务端
+      - name: Build Server
+        run: |
+          echo "🔨 构建服务端..."
+          npm run build:server
+          echo "✅ 服务端构建完成"
+
+      # 6. 移除开发依赖
+      - name: Strip devDependencies
+        run: |
+          echo "🧹 移除开发依赖..."
+          npm prune --omit=dev
+          echo "✅ 开发依赖已移除"
+          du -sh node_modules
+
+      # 7. 打包构建产物
+      - name: Package build artifacts
+        run: |
+          echo "📦 打包构建产物..."
+          # 创建发布目录
+          mkdir -p dev-build
+
+          # 复制必要文件
+          cp -r dist dev-build/
+          cp -r dist-server dev-build/
+          cp package.json dev-build/
+          cp package-lock.json dev-build/
+          cp -r server dev-build/
+          cp -r shared dev-build/
+          cp -r public dev-build/ 2>/dev/null || true
+
+          # 复制生产依赖
+          echo "📦 复制 node_modules..."
+          cp -r node_modules dev-build/
+          du -sh dev-build/node_modules
+
+          # 创建启动脚本
+          cat > dev-build/start-server.sh << 'EOF'
+          #!/bin/bash
+          # 开发环境启动脚本
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "🚀 启动 CloudCLI 开发服务器..."
+          echo "📁 目录: $SCRIPT_DIR"
+          echo "🔢 Node 版本: $(node -v)"
+          echo ""
+
+          echo "🌐 启动服务器..."
+          echo "   访问地址: http://localhost:3000"
+          echo ""
+
+          # 启动服务器
+          exec node dist-server/server/index.js
+          EOF
+          chmod +x dev-build/start-server.sh
+
+          # 创建开发模式启动脚本（热重载）
+          cat > dev-build/start-dev.sh << 'EOF'
+          #!/bin/bash
+          # 开发模式启动
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "🚀 启动 CloudCLI 开发模式..."
+          echo "🔥 支持热重载"
+
+          # 检查 node_modules 是否存在
+          if [ ! -d "node_modules" ]; then
+            echo "📦 安装依赖..."
+            npm ci --no-audit
+          fi
+
+          npm run server:dev
+          EOF
+          chmod +x dev-build/start-dev.sh
+
+          # 创建快速部署脚本
+          cat > dev-build/deploy.sh << 'EOF'
+          #!/bin/bash
+          # 一键部署脚本
+          set -e
+
+          SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+          cd "$SCRIPT_DIR"
+
+          echo "🚀 开始部署..."
+
+          # 如果作为服务运行，可以配置 systemd
+          if command -v systemctl &> /dev/null; then
+            echo "📝 如需配置 systemd 服务，请运行:"
+            echo "   sudo cp systemd/cloudcli.service /etc/systemd/system/"
+            echo "   sudo systemctl enable cloudcli"
+            echo "   sudo systemctl start cloudcli"
+          fi
+
+          echo ""
+          echo "✅ 部署准备完成！"
+          echo ""
+          echo "启动方式:"
+          echo "   1. 生产模式: ./start-server.sh"
+          echo "   2. 开发模式: ./start-dev.sh"
+          EOF
+          chmod +x dev-build/deploy.sh
+
+          # 创建版本信息文件
+          BUILD_DATE=$(date -u '+%Y-%m-%d %H:%M:%S UTC')
+          BUILD_BRANCH=$(git rev-parse --abbrev-ref HEAD)
+          BUILD_COMMIT=$(git rev-parse --short HEAD)
+          BUILD_MSG=$(git log -1 --pretty=%B | head -1)
+          echo "========================================" > dev-build/BUILD_INFO.txt
+          echo "CloudCLI 开发环境构建信息" >> dev-build/BUILD_INFO.txt
+          echo "========================================" >> dev-build/BUILD_INFO.txt
+          echo "构建时间: $BUILD_DATE" >> dev-build/BUILD_INFO.txt
+          echo "Git 分支: $BUILD_BRANCH" >> dev-build/BUILD_INFO.txt
+          echo "Git Commit: $BUILD_COMMIT" >> dev-build/BUILD_INFO.txt
+          echo "提交信息: $BUILD_MSG" >> dev-build/BUILD_INFO.txt
+          echo "构建来源: GitHub Actions" >> dev-build/BUILD_INFO.txt
+          echo "运行 ID: ${{ github.run_id }}" >> dev-build/BUILD_INFO.txt
+          echo "运行编号: ${{ github.run_number }}" >> dev-build/BUILD_INFO.txt
+          echo "工作流: ${{ github.workflow }}" >> dev-build/BUILD_INFO.txt
+          echo "触发事件: ${{ github.event_name }}" >> dev-build/BUILD_INFO.txt
+          echo "========================================" >> dev-build/BUILD_INFO.txt
+
+          # 创建快速启动说明
+          echo "========================================" > dev-build/README.txt
+          echo "CloudCLI 开发环境快速启动" >> dev-build/README.txt
+          echo "========================================" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "📥 首次使用:" >> dev-build/README.txt
+          echo "   1. 确保已安装 Node.js 22+" >> dev-build/README.txt
+          echo "   2. 运行: ./start-server.sh" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "🚀 启动方式:" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "   方式1 - 生产模式（推荐）:" >> dev-build/README.txt
+          echo "     ./start-server.sh" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "   方式2 - 开发模式（热重载）:" >> dev-build/README.txt
+          echo "     ./start-dev.sh" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "🌐 访问地址:" >> dev-build/README.txt
+          echo "   http://localhost:3000" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "📝 日志查看:" >> dev-build/README.txt
+          echo "   日志输出到控制台" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "🔧 其他命令:" >> dev-build/README.txt
+          echo "   安装依赖: npm ci" >> dev-build/README.txt
+          echo "   构建客户端: npm run build:client" >> dev-build/README.txt
+          echo "   构建服务端: npm run build:server" >> dev-build/README.txt
+          echo "" >> dev-build/README.txt
+          echo "========================================" >> dev-build/README.txt
+
+          # 压缩打包
+          BUILD_NAME="dev-build-$(date +%Y%m%d-%H%M%S)"
+          mv dev-build "$BUILD_NAME"
+          tar -czf "$BUILD_NAME.tar.gz" "$BUILD_NAME/"
+
+          # 同时保留最新构建的固定名称
+          cp "$BUILD_NAME.tar.gz" dev-build-latest.tar.gz
+
+          echo "✅ 打包完成:"
+          echo "   - $BUILD_NAME.tar.gz (带时间戳)"
+          echo "   - dev-build-latest.tar.gz (固定名称，用于自动部署)"
+          echo ""
+          ls -lh *.tar.gz
+
+      # 8. 上传构建产物到 GitHub Artifact
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dev-build-${{ github.run_number }}
+          path: |
+            dev-build-*.tar.gz
+            !dev-build-latest.tar.gz
+          retention-days: 7
+          compression-level: 0
+
+      # 9. 部署到远程服务器 (SCP + SSH)
+      # 参考生产环境 build-tarball.yml 的实现方式
+      - name: Deploy to remote server via SCP + SSH
+        if: ${{ !github.event.inputs.skip_deploy }}
+        env:
+          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
+          DEPLOY_HOST: ${{ env.DEPLOY_HOST }}
+          DEPLOY_USER: ${{ env.DEPLOY_USER }}
+          DEPLOY_PATH: ${{ env.DEPLOY_PATH }}
+          DEPLOY_PORT: ${{ secrets.DEPLOY_PORT }}
+          # 传递构建信息到远程脚本
+          BUILD_COMMIT: ${{ github.sha }}
+          BUILD_BRANCH: ${{ github.ref_name }}
+          BUILD_RUN_ID: ${{ github.run_id }}
+          BUILD_RUN_NUMBER: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          if [ -z "$DEPLOY_SSH_KEY" ] || [ -z "$DEPLOY_HOST" ]; then
+            echo "DEPLOY_SSH_KEY 或 DEPLOY_HOST 未设置 — 跳过部署。"
+            exit 0
+          fi
+          USER="${DEPLOY_USER:-root}"
+          PORT="${DEPLOY_PORT:-22}"
+
+          # 将私钥写入文件并设置权限
+          mkdir -p "$HOME/.ssh"
+          printf '%s\n' "$DEPLOY_SSH_KEY" > "$HOME/.ssh/deploy_key"
+          chmod 600 "$HOME/.ssh/deploy_key"
+
+          # 添加主机到 known_hosts
+          ssh-keyscan -p "$PORT" -H "$DEPLOY_HOST" >> "$HOME/.ssh/known_hosts" 2>/dev/null || true
+
+          SSH_OPTS=(-i "$HOME/.ssh/deploy_key" -o Port="$PORT" -o ConnectTimeout=15)
+
+          TARBALL="dev-build-latest.tar.gz"
+          echo "上传 $TARBALL 到 $USER@$DEPLOY_HOST ..."
+          scp "${SSH_OPTS[@]}" "$TARBALL" "$USER@$DEPLOY_HOST:$DEPLOY_PATH/dev-build-new.tar.gz"
+
+          echo "在服务器上解压并更新..."
+          ssh "${SSH_OPTS[@]}" "$USER@$DEPLOY_HOST" DEPLOY_DIR="$DEPLOY_PATH" BUILD_COMMIT="$BUILD_COMMIT" BUILD_BRANCH="$BUILD_BRANCH" BUILD_RUN_ID="$BUILD_RUN_ID" BUILD_RUN_NUMBER="$BUILD_RUN_NUMBER" 'bash -s' << 'EOFSH'
+          set -uo pipefail
+
+          # 加载 nvm
+          set +e
+          export NVM_DIR="$HOME/.nvm"
+          if [ -s "$NVM_DIR/nvm.sh" ]; then
+            \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1
+            nvm use default --silent >/dev/null 2>&1 || true
+          fi
+          set -e
+
+          DEPLOY_DIR="${DEPLOY_DIR:-/opt/claudecodeui-builds}"
+          BUILD_FILE="$DEPLOY_DIR/dev-build-new.tar.gz"
+          LOG_FILE="$DEPLOY_DIR/deploy.log"
+
+          # 记录开始部署
+          echo "" >> "$LOG_FILE"
+          echo "========================================" >> "$LOG_FILE"
+          echo "🚀 开始部署 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+          echo "Git Commit: ${BUILD_COMMIT:-unknown}" >> "$LOG_FILE"
+          echo "Git Branch: ${BUILD_BRANCH:-unknown}" >> "$LOG_FILE"
+          echo "Run ID: ${BUILD_RUN_ID:-unknown}" >> "$LOG_FILE"
+          echo "Run Number: ${BUILD_RUN_NUMBER:-unknown}" >> "$LOG_FILE"
+          echo "========================================" >> "$LOG_FILE"
+
+          cd "$DEPLOY_DIR"
+
+          # 检查构建包
+          if [ ! -f "$BUILD_FILE" ]; then
+            echo "❌ 错误: 构建包不存在" | tee -a "$LOG_FILE"
+            exit 1
+          fi
+
+          echo "✅ 构建包已上传: $(ls -lh "$BUILD_FILE" | awk '{print $5}')" | tee -a "$LOG_FILE"
+
+          # 备份当前版本
+          if [ -d "current" ]; then
+            BACKUP_NAME="backup-$(date +%Y%m%d-%H%M%S)"
+            echo "💾 备份当前版本到 $BACKUP_NAME..." | tee -a "$LOG_FILE"
+            mv current "$BACKUP_NAME"
+            # 只保留最近 3 个备份
+            ls -td backup-* 2>/dev/null | tail -n +4 | xargs -r rm -rf
+          fi
+          mkdir -p current
+
+          # 解压新版本
+          echo "📦 解压新版本..." | tee -a "$LOG_FILE"
+          tar -xzf "$BUILD_FILE" -C current --strip-components=1
+          rm -f "$BUILD_FILE"
+
+          cd current
+
+          echo "✅ 解压完成" | tee -a "$LOG_FILE"
+          echo "📋 构建信息:" | tee -a "$LOG_FILE"
+          cat BUILD_INFO.txt 2>/dev/null | tee -a "$LOG_FILE" || echo "无构建信息" | tee -a "$LOG_FILE"
+
+          # pm2 重启
+          echo "🔄 重启服务..." | tee -a "$LOG_FILE"
+          if command -v pm2 >/dev/null 2>&1; then
+            if pm2 describe claudecodeui >/dev/null 2>&1; then
+              pm2 restart claudecodeui 2>&1 | tee -a "$LOG_FILE"
+              pm2 save 2>/dev/null || true
+              echo "✅ 已通过 pm2 重启" | tee -a "$LOG_FILE"
+            else
+              pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui 2>&1 | tee -a "$LOG_FILE"
+              pm2 save 2>/dev/null || true
+              echo "🚀 已通过 pm2 启动" | tee -a "$LOG_FILE"
+            fi
+
+            # 记录 pm2 状态
+            echo "" >> "$LOG_FILE"
+            echo "PM2 状态:" >> "$LOG_FILE"
+            pm2 show claudecodeui 2>/dev/null | head -20 >> "$LOG_FILE" || echo "无法获取 pm2 状态" >> "$LOG_FILE"
+          else
+            echo "⚠️  pm2 未安装，请手动运行" | tee -a "$LOG_FILE"
+          fi
+
+          echo "" >> "$LOG_FILE"
+          echo "✅ 部署完成 - $(date '+%Y-%m-%d %H:%M:%S')" >> "$LOG_FILE"
+          echo "========================================" >> "$LOG_FILE"
+
+          # 显示最近 3 次部署记录
+          echo ""
+          echo "📜 最近 3 次部署记录:"
+          grep "🚀 开始部署\|✅ 部署完成\|❌ 错误" "$LOG_FILE" | tail -6
+          EOFSH
+
+          echo ""
+          echo "✅ 部署完成！服务器日志位置: $DEPLOY_PATH/deploy.log"
+
+      # 10. 显示构建信息
+      - name: Display build info
+        run: |
+          echo "========================================"
+          echo "✅ 开发环境构建完成！"
+          echo "========================================"
+          echo "📦 构建产物: dev-build-latest.tar.gz"
+          echo "🔢 构建编号: ${{ github.run_number }}"
+          echo "🌿 分支: $(git rev-parse --abbrev-ref HEAD)"
+          echo "📋 Commit: $(git rev-parse --short HEAD)"
+          echo "⏰ 时间: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo ""
+          echo "🌐 部署服务器: ${{ env.DEPLOY_HOST }}"
+          echo "📂 部署路径: ${{ env.DEPLOY_PATH }}"
+          echo ""
+          if [ "${{ github.event.inputs.skip_deploy }}" == "true" ]; then
+            echo "⚠️  本次构建已跳过部署"
+          else
+            echo "🚀 构建包已推送到服务器"
+            echo ""
+            echo "在服务器上执行以下命令启动:"
+            echo "   cd ${{ env.DEPLOY_PATH }}/current"
+            echo "   ./start-server.sh"
+          fi
+          echo "========================================"
+

@@ -52,7 +52,10 @@ export type UseFileTreeOperationsResult = {
 
   // Other operations
   handleCopyPath: (item: FileTreeNode) => void;
+  handleCopyShareUrl: (item: FileTreeNode) => Promise<void>;
   handleDownload: (item: FileTreeNode) => Promise<void>;
+  handleOpenFile: (item: FileTreeNode) => Promise<void>;
+  handleExtractZip: (item: FileTreeNode) => Promise<void>;
 
   // Loading state
   operationLoading: boolean;
@@ -240,11 +243,33 @@ export function useFileTreeOperations({
 
   // Copy path to clipboard
   const handleCopyPath = useCallback((item: FileTreeNode) => {
-    navigator.clipboard.writeText(item.path).catch(() => {
-      // Clipboard API may fail in some contexts (e.g., non-HTTPS)
-      showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
-      return;
-    });
+    // Try to use Clipboard API, fallback to textarea method if not available
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(item.path).catch(() => {
+        showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
+      });
+    } else {
+      // Fallback: use textarea and execCommand
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = item.path;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-999999px';
+        textarea.style.top = '-999999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!success) {
+          showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
+          return;
+        }
+      } catch (e) {
+        showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
+        return;
+      }
+    }
     showToast(t('fileTree.toast.pathCopied', 'Path copied to clipboard'), 'success');
   }, [showToast, t]);
 
@@ -338,6 +363,98 @@ export function useFileTreeOperations({
     showToast(t('fileTree.toast.folderDownloaded', 'Folder downloaded as ZIP'), 'success');
   }, [selectedProject, showToast, t, triggerBrowserDownload]);
 
+  // Open file in new tab (for HTML/PDF files)
+  const handleOpenFile = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    setOperationLoading(true);
+    try {
+      const response = await api.shareFile(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to generate share link');
+      }
+
+      const { shareUrl } = await response.json();
+      window.open(shareUrl, '_blank');
+      showToast(t('fileTree.toast.fileOpened', 'File opened in new tab'), 'success');
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
+    }
+  }, [selectedProject, showToast, t]);
+
+  // Copy file share URL to clipboard
+  const handleCopyShareUrl = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    try {
+      const response = await api.shareFile(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to generate share link');
+      }
+
+      const { shareUrl } = await response.json();
+
+      // Try to use Clipboard API, fallback to textarea method if not available
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
+        await navigator.clipboard.writeText(shareUrl);
+      } else {
+        // Fallback: use textarea and execCommand
+        const textarea = document.createElement('textarea');
+        textarea.value = shareUrl;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-999999px';
+        textarea.style.top = '-999999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!success) {
+          throw new Error('Copy command failed');
+        }
+      }
+
+      showToast(t('fileTree.toast.shareUrlCopied', 'Share link copied to clipboard'), 'success');
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    }
+  }, [selectedProject, showToast, t]);
+
+  // Extract ZIP file
+  const handleExtractZip = useCallback(async (item: FileTreeNode) => {
+    if (!selectedProject) return;
+
+    // Check if it's a ZIP file
+    if (!item.name.toLowerCase().endsWith('.zip')) {
+      showToast(t('fileTree.toast.notAZipFile', 'This is not a ZIP file'), 'error');
+      return;
+    }
+
+    setOperationLoading(true);
+    try {
+      const response = await api.extractZip(selectedProject.projectId, item.path);
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Failed to extract ZIP file');
+      }
+
+      const result = await response.json();
+      showToast(result.message || t('fileTree.toast.extracted', 'ZIP extracted successfully'), 'success');
+      onRefresh();
+    } catch (err) {
+      showToast((err as Error).message, 'error');
+    } finally {
+      setOperationLoading(false);
+    }
+  }, [selectedProject, showToast, t, onRefresh]);
+
   return {
     // Rename operations
     renamingItem,
@@ -365,7 +482,10 @@ export function useFileTreeOperations({
 
     // Other operations
     handleCopyPath,
+    handleCopyShareUrl,
     handleDownload,
+    handleOpenFile,
+    handleExtractZip,
 
     // Loading state
     operationLoading,
