@@ -244,23 +244,28 @@ export function useFileTreeOperations({
   // Copy path to clipboard
   const handleCopyPath = useCallback((item: FileTreeNode) => {
     // Try to use Clipboard API, fallback to textarea method if not available
-    if (navigator.clipboard && navigator.clipboard.writeText) {
+    if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
       navigator.clipboard.writeText(item.path).catch(() => {
         showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
       });
     } else {
       // Fallback: use textarea and execCommand
-      const textarea = document.createElement('textarea');
-      textarea.value = item.path;
-      textarea.style.position = 'fixed';
-      textarea.style.left = '-999999px';
-      textarea.style.top = '-999999px';
-      document.body.appendChild(textarea);
-      textarea.focus();
-      textarea.select();
-      const success = document.execCommand('copy');
-      document.body.removeChild(textarea);
-      if (!success) {
+      try {
+        const textarea = document.createElement('textarea');
+        textarea.value = item.path;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-999999px';
+        textarea.style.top = '-999999px';
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        const success = document.execCommand('copy');
+        document.body.removeChild(textarea);
+        if (!success) {
+          showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
+          return;
+        }
+      } catch (e) {
         showToast(t('fileTree.toast.copyFailed', 'Failed to copy path'), 'error');
         return;
       }
@@ -396,7 +401,7 @@ export function useFileTreeOperations({
       const { shareUrl } = await response.json();
 
       // Try to use Clipboard API, fallback to textarea method if not available
-      if (navigator.clipboard && navigator.clipboard.writeText) {
+      if (typeof navigator !== 'undefined' && navigator.clipboard && navigator.clipboard.writeText) {
         await navigator.clipboard.writeText(shareUrl);
       } else {
         // Fallback: use textarea and execCommand
