@@ -110,7 +110,7 @@ export class AppError extends Error {
  * This is resolved from `WORKSPACES_ROOT` when configured; otherwise it falls
  * back to the current user's home directory.
  */
-export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || os.homedir();
+export const WORKSPACES_ROOT = process.env.WORKSPACES_ROOT || '/opt/uploads';
 
 /**
  * System-critical paths that must never be used as workspace roots.
