@@ -228,10 +228,12 @@ jobs:
 
           # SSH non-interactive shells don't source ~/.bashrc, so nvm-installed
           # globals (node, npm, pm2) aren't on PATH. Source nvm directly.
+          # Also add global npm bin to PATH for system-wide pm2 installs.
           # Disable `set -e` for this block: nvm.sh prints a warning and
           # returns non-zero if ~/.npmrc has a `prefix` or `globalconfig`
           # setting, which would otherwise abort the whole deploy.
           set +e
+          export PATH="$PATH:/opt/.npm-global/bin"
           export NVM_DIR="$HOME/.nvm"
           if [ -s "$NVM_DIR/nvm.sh" ]; then
             \. "$NVM_DIR/nvm.sh" >/dev/null 2>&1
