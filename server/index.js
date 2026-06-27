@@ -1207,11 +1207,8 @@ app.post('/api/projects/:projectId/files/share', authenticateToken, async (req, 
         });
 
         // Construct share URL
-        // Use forwarded headers if behind a proxy, otherwise use req info
-        const forwardedProto = req.get('x-forwarded-proto');
-        const forwardedHost = req.get('x-forwarded-host');
-        const protocol = forwardedProto || req.protocol;
-        const host = forwardedHost || req.get('host');
+        const protocol = req.protocol;
+        const host = req.get('host');
         const shareUrl = `${protocol}://${host}/api/files/shared/${shareCode}`;
 
         res.json({
