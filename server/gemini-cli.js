@@ -337,7 +337,7 @@ async function spawnGemini(command, options = {}, ws) {
         geminiProcess.stdin.end();
 
         // Add timeout handler
-        const timeoutMs = 120000; // 120 seconds for slower models
+        const timeoutMs = 600000; // 10 minutes for long-running tasks
         let timeout;
 
         const startTimeout = () => {
