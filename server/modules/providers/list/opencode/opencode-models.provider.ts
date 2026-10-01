@@ -65,7 +65,7 @@ export const OPENCODE_FALLBACK_MODELS: ProviderModelsDefinition = {
   DEFAULT: 'anthropic/claude-sonnet-4-5',
 };
 
-const OPEN_CODE_MODELS_TIMEOUT_MS = 20_000;
+const OPEN_CODE_MODELS_TIMEOUT_MS = 60_000;
 const MODEL_ID_LINE = /^[a-z0-9][a-z0-9._-]*\/[a-z0-9][a-z0-9._-]*$/i;
 const spawnFunction = process.platform === 'win32' ? crossSpawn : spawn;
 const DATE_TOKEN = /^\d{8}$/;
