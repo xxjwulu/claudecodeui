@@ -27,9 +27,9 @@ env:
   NODE_VERSION: '24'
   BUILD_ENV: 'development'
   # 默认服务器配置
-  DEPLOY_HOST: '47.86.201.113'
-  DEPLOY_USER: 'root'
-  DEPLOY_PATH: '/opt/claudecodeui-builds'
+  DEPLOY_HOST: '47.120.36.3'
+  DEPLOY_USER: 'xxjwulu'
+  DEPLOY_PATH: '/home/xxjwulu/cloudcli-builds'
 
 jobs:
   # 构建任务
@@ -347,23 +347,27 @@ jobs:
           echo "📋 构建信息:" | tee -a "$LOG_FILE"
           cat BUILD_INFO.txt 2>/dev/null | tee -a "$LOG_FILE" || echo "无构建信息" | tee -a "$LOG_FILE"
 
+          # 同步新构建到运行目录
+          echo "🔄 同步构建到 /home/xxjwulu/cloudcli/ ..." | tee -a "$LOG_FILE"
+          rsync -a --delete "$DEPLOY_DIR/current/" "/home/xxjwulu/cloudcli/" 2>&1 | tee -a "$LOG_FILE"
+
           # pm2 重启
           echo "🔄 重启服务..." | tee -a "$LOG_FILE"
           if command -v pm2 >/dev/null 2>&1; then
-            if pm2 describe claudecodeui >/dev/null 2>&1; then
-              pm2 restart claudecodeui 2>&1 | tee -a "$LOG_FILE"
+            if pm2 describe cloudcli >/dev/null 2>&1; then
+              pm2 restart cloudcli 2>&1 | tee -a "$LOG_FILE"
               pm2 save 2>/dev/null || true
-              echo "✅ 已通过 pm2 重启" | tee -a "$LOG_FILE"
+              echo "✅ 已通过 pm2 重启 cloudcli" | tee -a "$LOG_FILE"
             else
-              pm2 start "$DEPLOY_DIR/current/dist-server/server/index.js" --name claudecodeui 2>&1 | tee -a "$LOG_FILE"
+              pm2 start /home/xxjwulu/cloudcli/dist-server/server/index.js --name cloudcli 2>&1 | tee -a "$LOG_FILE"
               pm2 save 2>/dev/null || true
-              echo "🚀 已通过 pm2 启动" | tee -a "$LOG_FILE"
+              echo "🚀 已通过 pm2 启动 cloudcli" | tee -a "$LOG_FILE"
             fi
 
             # 记录 pm2 状态
             echo "" >> "$LOG_FILE"
             echo "PM2 状态:" >> "$LOG_FILE"
-            pm2 show claudecodeui 2>/dev/null | head -20 >> "$LOG_FILE" || echo "无法获取 pm2 状态" >> "$LOG_FILE"
+            pm2 show cloudcli 2>/dev/null | head -20 >> "$LOG_FILE" || echo "无法获取 pm2 状态" >> "$LOG_FILE"
           else
             echo "⚠️  pm2 未安装，请手动运行" | tee -a "$LOG_FILE"
           fi
