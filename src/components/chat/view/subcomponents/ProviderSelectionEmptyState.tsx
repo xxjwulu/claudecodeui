@@ -26,8 +26,6 @@ import {
 const PROVIDER_META: { id: LLMProvider; name: string }[] = [
   { id: "claude", name: "Anthropic" },
   { id: "codex", name: "OpenAI" },
-  { id: "gemini", name: "Google" },
-  { id: "cursor", name: "Cursor" },
   { id: "opencode", name: "OpenCode" },
 ];
 

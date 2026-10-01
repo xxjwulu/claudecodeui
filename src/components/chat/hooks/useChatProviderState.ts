@@ -147,7 +147,7 @@ export function useChatProviderState({ selectedSession, selectedProject }: UseCh
   }, []);
 
   const loadProviderModels = useCallback(async (options: { bypassCache?: boolean } = {}) => {
-    const providers: LLMProvider[] = ['claude', 'cursor', 'codex', 'gemini', 'opencode'];
+    const providers: LLMProvider[] = ['claude', 'codex', 'opencode'];
     const requestId = providerModelsRequestIdRef.current + 1;
     providerModelsRequestIdRef.current = requestId;
     const isHardRefresh = options.bypassCache === true;

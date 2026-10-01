@@ -24,7 +24,7 @@ export default function AgentsSettingsTab({
   const [selectedCategory, setSelectedCategory] = useState<AgentCategory>('account');
 
   const visibleAgents = useMemo<AgentProvider[]>(() => {
-    return ['claude', 'cursor', 'codex', 'gemini', 'opencode'];
+    return ['claude', 'codex', 'opencode'];
   }, []);
 
   const agentContextById = useMemo<Record<AgentProvider, AgentContext>>(() => ({
