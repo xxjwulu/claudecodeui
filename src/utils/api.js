@@ -1,4 +1,5 @@
 import { IS_PLATFORM } from "../constants/config";
+import { withBasePath } from "./basePath";
 
 /**
  * Error thrown by `authenticatedFetch` when the server returns a non-2xx
@@ -66,7 +67,7 @@ export const authenticatedFetch = async (url, options = {}) => {
     defaultHeaders['Authorization'] = `Bearer ${token}`;
   }
 
-  const response = await fetch(url, {
+  const response = await fetch(withBasePath(url), {
     ...options,
     headers: {
       ...defaultHeaders,
@@ -93,13 +94,13 @@ export const api = {
   // because they run before a token exists; login/register handle 4xx
   // themselves to render form-level validation messages.
   auth: {
-    status: () => fetch('/api/auth/status'),
-    login: (username, password) => fetch('/api/auth/login', {
+    status: () => fetch(withBasePath('/api/auth/status')),
+    login: (username, password) => fetch(withBasePath('/api/auth/login'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
     }),
-    register: (username, password) => fetch('/api/auth/register', {
+    register: (username, password) => fetch(withBasePath('/api/auth/register'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username, password }),
@@ -181,7 +182,7 @@ export const api = {
     const token = localStorage.getItem('auth-token');
     const params = new URLSearchParams({ q: query, limit: String(limit) });
     if (token) params.set('token', token);
-    return `/api/providers/search/sessions?${params.toString()}`;
+    return withBasePath(`/api/providers/search/sessions?${params.toString()}`);
   },
   createProject: (projectData) =>
     authenticatedFetch('/api/projects/create-project', {

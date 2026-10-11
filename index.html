@@ -33,14 +33,19 @@
     <!-- Service Worker Registration -->
     <script>
       if ('serviceWorker' in navigator) {
-        window.addEventListener('load', () => {
-          navigator.serviceWorker.register('/sw.js')
-            .then(registration => {
-              console.log('SW registered: ', registration);
-            })
-            .catch(registrationError => {
-              console.log('SW registration failed: ', registrationError);
-            });
+        window.addEventListener('load', function () {
+          var s = document.querySelector('script[type="module"][src]');
+          var base = '';
+          if (s) {
+            try {
+              var p = new URL(s.getAttribute('src'), document.baseURI).pathname;
+              var m = p.match(/^(.*)\/assets\//);
+              if (m && m[1]) base = m[1];
+            } catch (e) {}
+          }
+          navigator.serviceWorker.register(base + '/sw.js').catch(function (e) {
+            console.log('SW registration failed: ', e);
+          });
         });
       }
     </script>

@@ -63,6 +63,8 @@ jobs:
 
       # 4. 构建客户端
       - name: Build Client
+        env:
+          VITE_BASE_PATH: '/cloudcli/'
         run: |
           echo "🔨 构建客户端..."
           npm run build:client
