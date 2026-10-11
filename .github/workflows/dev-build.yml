@@ -349,29 +349,45 @@ jobs:
           echo "📋 构建信息:" | tee -a "$LOG_FILE"
           cat BUILD_INFO.txt 2>/dev/null | tee -a "$LOG_FILE" || echo "无构建信息" | tee -a "$LOG_FILE"
 
-          # 同步新构建到运行目录
-          echo "🔄 同步构建到 /home/xxjwulu/cloudcli/ ..." | tee -a "$LOG_FILE"
-          rsync -a --delete "$DEPLOY_DIR/current/" "/home/xxjwulu/cloudcli/" 2>&1 | tee -a "$LOG_FILE"
+          # 原子切换:先 rsync 到空目录(无合并冲突),成功后 mv 切换,失败保留旧版
+          NEW_DIR="/home/xxjwulu/cloudcli-new"
+          OLD_DIR="/home/xxjwulu/cloudcli-old"
+          rm -rf "$NEW_DIR"
+          mkdir -p "$NEW_DIR"
+          echo "🔄 同步构建到 $NEW_DIR ..." | tee -a "$LOG_FILE"
+          if rsync -a "$DEPLOY_DIR/current/" "$NEW_DIR/" 2>&1 | tee -a "$LOG_FILE"; then
+            echo "🔄 原子切换目录..." | tee -a "$LOG_FILE"
+            rm -rf "$OLD_DIR"
+            mv "/home/xxjwulu/cloudcli" "$OLD_DIR" 2>/dev/null || true
+            mv "$NEW_DIR" "/home/xxjwulu/cloudcli"
 
-          # pm2 重启
-          echo "🔄 重启服务..." | tee -a "$LOG_FILE"
-          if command -v pm2 >/dev/null 2>&1; then
-            if pm2 describe cloudcli >/dev/null 2>&1; then
-              pm2 restart cloudcli 2>&1 | tee -a "$LOG_FILE"
-              pm2 save 2>/dev/null || true
-              echo "✅ 已通过 pm2 重启 cloudcli" | tee -a "$LOG_FILE"
+            # pm2 重启
+            echo "🔄 重启服务..." | tee -a "$LOG_FILE"
+            if command -v pm2 >/dev/null 2>&1; then
+              if pm2 describe cloudcli >/dev/null 2>&1; then
+                pm2 restart cloudcli 2>&1 | tee -a "$LOG_FILE"
+                pm2 save 2>/dev/null || true
+                echo "✅ 已通过 pm2 重启 cloudcli" | tee -a "$LOG_FILE"
+              else
+                pm2 start /home/xxjwulu/cloudcli/dist-server/server/index.js --name cloudcli 2>&1 | tee -a "$LOG_FILE"
+                pm2 save 2>/dev/null || true
+                echo "🚀 已通过 pm2 启动 cloudcli" | tee -a "$LOG_FILE"
+              fi
+
+              # 记录 pm2 状态
+              echo "" >> "$LOG_FILE"
+              echo "PM2 状态:" >> "$LOG_FILE"
+              pm2 show cloudcli 2>/dev/null | head -20 >> "$LOG_FILE" || echo "无法获取 pm2 状态" >> "$LOG_FILE"
             else
-              pm2 start /home/xxjwulu/cloudcli/dist-server/server/index.js --name cloudcli 2>&1 | tee -a "$LOG_FILE"
-              pm2 save 2>/dev/null || true
-              echo "🚀 已通过 pm2 启动 cloudcli" | tee -a "$LOG_FILE"
+              echo "⚠️  pm2 未安装，请手动运行" | tee -a "$LOG_FILE"
             fi
 
-            # 记录 pm2 状态
-            echo "" >> "$LOG_FILE"
-            echo "PM2 状态:" >> "$LOG_FILE"
-            pm2 show cloudcli 2>/dev/null | head -20 >> "$LOG_FILE" || echo "无法获取 pm2 状态" >> "$LOG_FILE"
+            # 清理旧版本
+            rm -rf "$OLD_DIR" 2>/dev/null || true
           else
-            echo "⚠️  pm2 未安装，请手动运行" | tee -a "$LOG_FILE"
+            echo "❌ rsync 失败,保留旧版本,中止部署" | tee -a "$LOG_FILE"
+            rm -rf "$NEW_DIR"
+            exit 1
           fi
 
           echo "" >> "$LOG_FILE"
